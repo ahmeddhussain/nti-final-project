@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Project</title>
+</head>
+<body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9;">
+    <h1>NTI DevOps Final Project</h1>
+    <div style="margin: 20px auto; padding: 20px; max-width: 400px; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <h3>Database Status:</h3>
+        <p id="db-message" style="font-size: 18px; color: #2e7d32; font-weight: bold;">Connecting to backend...</p>
+    </div>
+
+    <script>
+        // Calls the backend running on port 5000
+        fetch('http://localhost:5000/api/status')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('db-message').innerText = data.message;
+            })
+            .catch(err => {
+                document.getElementById('db-message').innerText = "Failed to connect to Backend API!";
+                document.getElementById('db-message').style.color = "#c62828";
+            });
+    </script>
+</body>
+</html>
