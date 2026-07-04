@@ -15,6 +15,11 @@ resource "aws_instance" "jenkins" {
   associate_public_ip_address = true
   key_name               = aws_key_pair.jenkins_key.key_name 
 
+    root_block_device {
+    volume_size           = 25
+    volume_type           = "gp3"
+    delete_on_termination = true
+  }
   tags = {
     Name        = "${var.environment}-jenkins-server"
     Environment = var.environment

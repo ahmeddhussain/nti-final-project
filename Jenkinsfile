@@ -47,10 +47,10 @@ pipeline {
         stage('3. Build & Scan Frontend Image') {
             steps {
                 echo 'Building Frontend Docker Image...'
-                sh "docker build -t ${FRONTEND_ECR}:${BUILD_NUMBER} ./frontend"
+                # UPDATED: Added ./docker/ to the path
+                sh "docker build -t ${FRONTEND_ECR}:${BUILD_NUMBER} ./docker/frontend"
                 
                 echo 'Scanning Frontend Image with Trivy...'
-                // Spins up the official Trivy container to scan the newly built image
                 sh """
                 docker run --rm \
                   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -65,7 +65,8 @@ pipeline {
         stage('4. Build & Scan Backend Image') {
             steps {
                 echo 'Building Backend Docker Image...'
-                sh "docker build -t ${BACKEND_ECR}:${BUILD_NUMBER} ./backend"
+                # UPDATED: Added ./docker/ to the path
+                sh "docker build -t ${BACKEND_ECR}:${BUILD_NUMBER} ./docker/backend"
                 
                 echo 'Scanning Backend Image with Trivy...'
                 sh """
