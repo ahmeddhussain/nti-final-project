@@ -1,0 +1,16 @@
+# 1. Ignore local provider cache (very large folder)
+.terraform/
+
+# 2. Ignore Terraform state files (contains sensitive system data)
+*.tfstate
+*.tfstate.*
+
+
+# 3. CRITICAL SECURITY: Ignore your private SSH key!
+# This private key must never be uploaded to GitHub.
+jenkins_key
+jenkins_key.pub
+
+# 4. Ignore log files
+crash.log
+*.log

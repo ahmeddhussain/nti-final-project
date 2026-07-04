@@ -1,0 +1,73 @@
+---
+- name: Install Docker and Run Jenkins Container
+  hosts: jenkins
+  become: true
+  tasks:
+    - name: 1. Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+        update_cache: true
+
+    - name: 2. Add Docker's official GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+        chmod 644 /usr/share/keyrings/docker-archive-keyring.gpg
+
+    - name: 3. Add Docker repository to sources
+      ansible.builtin.shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+
+    - name: 4. Update package index and install Docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: true
+
+    - name: 5. Start and enable Docker service
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: 6. Add ubuntu user to Docker group
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+
+    - name: 7. Set permissive permissions on docker.sock (Crucial for Jenkins Container)
+      ansible.builtin.file:
+        path: /var/run/docker.sock
+        mode: '0777'
+
+    - name: 8. Launch Jenkins LTS Container (with mounted Docker socket)
+      ansible.builtin.shell: |
+        docker run -p 8080:8080 -p 50000:50000 -d \
+          --name jenkins \
+          --restart always \
+          -v jenkins_home:/var/jenkins_home \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v /usr/bin/docker:/usr/bin/docker \
+          jenkins/jenkins:lts
+      ignore_errors: true
+
+    - name: 9. Pause for 20 seconds to allow Jenkins to initialize and generate password
+      ansible.builtin.pause:
+        seconds: 20
+
+    - name: 10. Retrieve Jenkins Initiation Password
+      ansible.builtin.shell: |
+        docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_password
+
+    - name: 11. SHOW JENKINS INITIAL ADMIN PASSWORD
+      ansible.builtin.debug:
+        msg: "SUCCESS! Your Jenkins Initial Admin Password is: {{ jenkins_password.stdout }}"

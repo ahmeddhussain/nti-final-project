@@ -1,0 +1,20 @@
+---
+- name: Install and Run SonarQube Container
+  hosts: jenkins
+  become: true
+  tasks:
+    - name: 1. Increase vm.max_map_count on host (Required by SonarQube Elasticsearch)
+      ansible.builtin.shell: |
+        sysctl -w vm.max_map_count=262144
+        echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+
+    - name: 2. Launch SonarQube LTS Container
+      ansible.builtin.shell: |
+        docker run -p 9000:9000 -d \
+          --name sonarqube \
+          --restart always \
+          -v sonarqube_data:/opt/sonarqube/data \
+          -v sonarqube_extensions:/opt/sonarqube/extensions \
+          -v sonarqube_logs:/opt/sonarqube/logs \
+          sonarqube:lts-community
+      ignore_errors: true
