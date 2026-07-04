@@ -1,6 +1,7 @@
+apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: pod-resource-alerts
+  name: "{{ .Release.Name }}-pod-resource-alerts"
   labels:
     release: prometheus # Ties this rule directly to your Prometheus operator
 spec:
@@ -14,7 +15,8 @@ spec:
         severity: warning
       annotations:
         summary: "Pod CPU usage is above 80%!"
-        description: "Pod {{ $labels.pod }} has been using more than 80% CPU for the last 2 minutes."
+        # FIXED: We escape the double curly braces so Helm passes them literally to Prometheus!
+        description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has been using more than 80% CPU for the last 2 minutes."
 
     - alert: PodMemoryUsageTooHigh
       expr: container_memory_working_set_bytes{container!=""} / container_spec_memory_limit_bytes{container!=""} > 0.80
@@ -23,4 +25,5 @@ spec:
         severity: warning
       annotations:
         summary: "Pod Memory usage is above 80%!"
-        description: "Pod {{ $labels.pod }} has been using more than 80% Memory for the last 2 minutes."
+        # FIXED: We escape the double curly braces so Helm passes them literally to Prometheus!
+        description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has been using more than 80% Memory for the last 2 minutes."
