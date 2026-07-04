@@ -6,7 +6,7 @@ pipeline {
     }
 
     environment {
-        AWS_ACCOUNT_ID = '800770414458' // Your verified AWS Account ID!
+        AWS_ACCOUNT_ID = '800770414458' 
         AWS_REGION     = 'us-east-1'
         CLUSTER_NAME   = 'nti-eks-cluster'
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
@@ -76,7 +76,6 @@ pipeline {
         stage('5. Push Images to AWS ECR') {
             steps {
                 echo 'Logging into AWS ECR and pushing images...'
-                // We run the AWS CLI container, mounting your EC2's credentials to log into ECR
                 sh """
                 docker run --rm \
                   -v /home/ubuntu/.aws:/root/.aws \
@@ -93,15 +92,15 @@ pipeline {
             steps {
                 echo 'Deploying application to EKS cluster...'
                 sh """
-                # 1. Use AWS CLI container to generate the EKS kubeconfig file in our workspace
+                # 1. Generate the EKS kubeconfig file in our workspace (Fixed path!)
                 docker run --rm \
-                  -v ${HOME}/.aws:/root/.aws \
+                  -v /home/ubuntu/.aws:/root/.aws \
                   -v "${WORKSPACE}:/apps" \
-                  amazon/aws-cli eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME} --kubeconfig /apps/config
+                  amazon/aws-cli eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME} --kubeconfig /apps/kubeconfig
                 
-                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
-                S3_BUCKET=\$(docker run --rm -v ${HOME}/.aws:/root/.aws amazon/aws-cli s3 api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=\$(docker run --rm -v ${HOME}/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS (Fixed paths!)
+                S3_BUCKET=\&((docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3 api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text))
+                DB_PASS=\&((docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+'))
                 
                 # 3. Use the Helm container to deploy, mounting our generated kubeconfig
                 docker run --rm \
@@ -110,8 +109,8 @@ pipeline {
                   alpine/helm:3.12.0 --kubeconfig /apps/kubeconfig upgrade --install nti-release ./helm \
                   --set frontend.image.tag=${BUILD_NUMBER} \
                   --set backend.image.tag=${BUILD_NUMBER} \
-                  --set s3_bucket_name=\$S3_BUCKET \
-                  --set database.password=\$DB_PASS
+                  --set s3_bucket_name=\\\$S3_BUCKET \
+                  --set database.password=\\\$DB_PASS
                 """
             }
         }
@@ -119,10 +118,10 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline completed successfully! Application is live on EKS! 🎉'
+            echo 'Pipeline completed successfully! Application is live on EKS! '
         }
         failure {
-            echo 'Pipeline failed. Please check the logs for errors. ❌'
+            echo 'Pipeline failed. Please check the logs for errors. '
         }
     }
 }
