@@ -2,19 +2,15 @@ pipeline {
     agent any
 
     triggers {
-        // SCM Polling: Automatically polls GitHub every single minute for changes.
-        // This replaces the need for webhooks so your changing IP won't break things!
-        cron('* * * * *')
+        cron('* * * * *') // SCM Polling: automatically checks GitHub every minute
     }
 
     environment {
-        // --- UPDATE THESE TWO VARIABLES FOR YOUR AWS ACCOUNT ---
-        AWS_ACCOUNT_ID = '800770414458' // Your AWS Account ID
+        AWS_ACCOUNT_ID = '800770414458' // Your verified AWS Account ID!
         AWS_REGION     = 'us-east-1'
-        
         CLUSTER_NAME   = 'nti-eks-cluster'
-        SONAR_HOST_URL = 'http://172.17.0.1:9000' //internal docker host IP for SonarQube container that never changes, so we can use it in the Jenkinsfile without worrying about dynamic IPs    
-        // ECR Registry URLs (These are generated dynamically)
+        SONAR_HOST_URL = 'http://172.17.0.1:9000'
+        
         FRONTEND_ECR   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-frontend-app"
         BACKEND_ECR    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-backend-app"
     }
@@ -30,7 +26,6 @@ pipeline {
         stage('2. SonarQube Quality Analysis') {
             steps {
                 echo 'Running Static Code Analysis via SonarQube Container...'
-                // Spins up the official Sonar Scanner container on-the-fly
                 sh """
                 docker run --rm \
                   -e SONAR_HOST_URL=${SONAR_HOST_URL} \
@@ -81,9 +76,13 @@ pipeline {
         stage('5. Push Images to AWS ECR') {
             steps {
                 echo 'Logging into AWS ECR and pushing images...'
-                // We use the host's AWS CLI config to log into ECR and push the images
+                // We run the AWS CLI container, mounting your EC2's credentials to log into ECR
                 sh """
-                aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                docker run --rm \
+                  -v /home/ubuntu/.aws:/root/.aws \
+                  amazon/aws-cli ecr get-login-password --region ${AWS_REGION} | \
+                  docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
                 """
@@ -93,16 +92,22 @@ pipeline {
         stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                // Updates the EKS connection context and deploys the Helm chart
                 sh """
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                # 1. Use AWS CLI container to generate the EKS kubeconfig file in our workspace
+                docker run --rm \
+                  -v ${HOME}/.aws:/root/.aws \
+                  -v "${WORKSPACE}:/apps" \
+                  amazon/aws-cli eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME} --kubeconfig /apps/config
                 
-                # Fetch S3 bucket name and DB password dynamically from AWS
-                S3_BUCKET=\$(aws s3 api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
+                S3_BUCKET=\$(docker run --rm -v ${HOME}/.aws:/root/.aws amazon/aws-cli s3 api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=\$(docker run --rm -v ${HOME}/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # Deploy using Helm
-                helm upgrade --install nti-release ./helm \
+                # 3. Use the Helm container to deploy, mounting our generated kubeconfig
+                docker run --rm \
+                  -v "${WORKSPACE}:/apps" \
+                  -w /apps \
+                  alpine/helm:3.12.0 --kubeconfig /apps/kubeconfig upgrade --install nti-release ./helm \
                   --set frontend.image.tag=${BUILD_NUMBER} \
                   --set backend.image.tag=${BUILD_NUMBER} \
                   --set s3_bucket_name=\$S3_BUCKET \
@@ -114,10 +119,10 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline completed successfully! Application is live on EKS! '
+            echo 'Pipeline completed successfully! Application is live on EKS! 🎉'
         }
         failure {
-            echo 'Pipeline failed. Please check the logs for errors. '
+            echo 'Pipeline failed. Please check the logs for errors. ❌'
         }
     }
 }
