@@ -88,45 +88,79 @@ pipeline {
 
         stage('6. Deploy to EKS via Helm') {
             steps {
-                echo 'Deploying application to EKS cluster...'
-                sh """
+                echo 'Deploying application and monitoring stack to EKS cluster...'
+                sh '''
                 # 1. Update EKS Connection context natively
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig kubeconfig
                 
                 # 2. Fetch variables dynamically from AWS
-                S3_BUCKET=\$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # 3. Deploy via Helm natively
-                # FIXED: We pass the real ECR repositories dynamically so Kubernetes pulls successfully!
-                helm upgrade --install nti-release ./helm \
-                  --set frontend.image.repository=${FRONTEND_ECR} \
-                  --set backend.image.repository=${BACKEND_ECR} \
-                  --set frontend.image.tag=${BUILD_NUMBER} \
-                  --set backend.image.tag=${BUILD_NUMBER} \
-                  --set s3_bucket_name=\$S3_BUCKET \
-                  --set database.password=\$DB_PASS
-                """
+                # 3. Deploy application via Helm natively
+                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                  --set frontend.image.tag=$BUILD_NUMBER \
+                  --set backend.image.tag=$BUILD_NUMBER \
+                  --set s3_bucket_name=$S3_BUCKET \
+                  --set database.password=$DB_PASS
+                
+                # 4. Add official Prometheus & Grafana Repositories
+                helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+                helm repo add grafana https://grafana.github.io/helm-charts
+                helm repo update
+                
+                # 5. Automatically deploy Prometheus & Grafana (ClusterIP keeps it secure & free)
+                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
+                  --namespace monitoring \
+                  --create-namespace \
+                  --set grafana.adminPassword="admin" \
+                  --set alertmanager.enabled=true
+                
+                # 6. Automatically deploy Loki (Loki Stack for Logs)
+                helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig \
+                  --namespace monitoring \
+                  --set loki.persistence.enabled=false
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'Pipeline completed successfully! '
-            sh """
-            # Fetch the public ELB DNS name dynamically from Kubernetes
-            ELB_URL=\$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            echo 'Pipeline completed successfully! 🎉'
+            sh '''
+            # 1. Fetch the public ELB DNS name dynamically for the Frontend app
+            ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
             
+            # 2. Fetch your EC2 server's active AWS public IP dynamically
+            HOST_IP=$(curl -s ifconfig.me)
+            
+            # 3. AUTOMATION: Destroy any old background tunnels to prevent port conflicts
+            docker rm -f grafana-tunnel || true
+            
+            # 4. AUTOMATION: Launch a tiny helper container to silently tunnel Grafana to host port 3000
+            docker run -d \
+              --name grafana-tunnel \
+              --network host \
+              -v "$(pwd)/kubeconfig:/config" \
+              bitnami/kubectl:1.28 \
+              --kubeconfig /config port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
+            
+            echo ""
             echo "=========================================================="
-            echo "SUCCESS! Your application is live on AWS EKS!"
-            echo "Access your live website here:"
-            echo "http://\\\$ELB_URL"
+            echo "1. Your Web Application is live on AWS EKS!"
+            echo "http://${ELB_URL}"
             echo "=========================================================="
-            """
+            echo ""
+            echo "=========================================================="
+            echo "2. Your Grafana Monitoring Dashboard is live on AWS EKS!"
+            echo "http://${HOST_IP}:3000"
+            echo "Credentials: admin / admin"
+            echo "=========================================================="
+            '''
         }
         failure {
-            echo 'Pipeline failed. Please check the logs for errors. '
+            echo 'Pipeline failed. Please check the logs for errors. ❌'
         }
     }
 }
