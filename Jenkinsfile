@@ -47,7 +47,6 @@ pipeline {
         stage('3. Build & Scan Frontend Image') {
             steps {
                 echo 'Building Frontend Docker Image...'
-                # UPDATED: Added ./docker/ to the path
                 sh "docker build -t ${FRONTEND_ECR}:${BUILD_NUMBER} ./docker/frontend"
                 
                 echo 'Scanning Frontend Image with Trivy...'
@@ -65,7 +64,6 @@ pipeline {
         stage('4. Build & Scan Backend Image') {
             steps {
                 echo 'Building Backend Docker Image...'
-                # UPDATED: Added ./docker/ to the path
                 sh "docker build -t ${BACKEND_ECR}:${BUILD_NUMBER} ./docker/backend"
                 
                 echo 'Scanning Backend Image with Trivy...'
