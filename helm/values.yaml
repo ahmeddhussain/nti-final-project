@@ -1,0 +1,33 @@
+# --- FRONTEND CONFIGURATION ---
+frontend:
+  replicaCount: 2
+  image:
+    repository: "YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/dev-frontend-app" # We will update this later!
+    tag: "latest"
+  service:
+    type: LoadBalancer # Tells AWS to build the ELB!
+    port: 80
+
+# --- BACKEND CONFIGURATION ---
+backend:
+  replicaCount: 2
+  image:
+    repository: "YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/dev-backend-app" # We will update this later!
+    tag: "latest"
+  service:
+    type: ClusterIP # Keeps the backend strictly private inside the cluster
+    port: 5000
+
+# --- DATABASE CONFIGURATION (AWS RDS) ---
+# Your Backend pods need to know where your RDS database is.
+# We will inject the real values here during the Jenkins pipeline.
+database:
+  host: "dev-mysql-db.xxxxxx.us-east-1.rds.amazonaws.com"
+  user: "admin"
+  name: "final_project_db"
+  password: "placeholder-password" # Jenkins will overwrite this dynamically during deployment!
+  # Note: Password is NOT stored here for security reasons!
+
+# --- S3 LOG BUCKET CONFIGURATION ---
+s3_bucket_name: "dev-nti-elb-access-logs-xxxx" # We will replace this with your real S3 output
+
