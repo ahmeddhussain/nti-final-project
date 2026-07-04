@@ -91,28 +91,31 @@ pipeline {
         stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                // Using single quotes (''') means zero backslash-escaping is needed.
-                // Standard Bash variables ($BUILD_NUMBER, $S3_BUCKET, etc.) work perfectly out of the box!
                 sh '''
-                # 1. Generate the EKS kubeconfig file in our workspace (using host .aws)
+                # Use a single AWS CLI container to do EVERYTHING.
+                # We install Helm on the fly, fetch the secrets, and deploy.
                 docker run --rm \
                   -v /home/ubuntu/.aws:/root/.aws \
                   -v "${WORKSPACE}:/apps" \
-                  amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
-                
-                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
-                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
-                
-                # 3. Use the Helm container to deploy, mounting our generated kubeconfig
-                docker run --rm \
-                  -v "${WORKSPACE}:/apps" \
                   -w /apps \
-                  alpine/helm:3.12.0 upgrade --install nti-release ./helm --kubeconfig /apps/kubeconfig \
-                  --set frontend.image.tag=$BUILD_NUMBER \
-                  --set backend.image.tag=$BUILD_NUMBER \
-                  --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS
+                  amazon/aws-cli bash -c "
+                    # 1. Install Helm quickly inside the container
+                    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+                    
+                    # 2. Generate the EKS kubeconfig
+                    aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
+                    
+                    # 3. Fetch variables
+                    S3_BUCKET=\\$(aws s3api list-buckets --query 'Buckets[?contains(Name, `access-logs`)].Name' --output text)
+                    DB_PASS=\\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '\\"password\\":\\"\\K[^\\"]+')
+                    
+                    # 4. Deploy using Helm with the generated config
+                    helm upgrade --install nti-release ./helm --kubeconfig /apps/kubeconfig \
+                      --set frontend.image.tag=$BUILD_NUMBER \
+                      --set backend.image.tag=$BUILD_NUMBER \
+                      --set s3_bucket_name=\\$S3_BUCKET \
+                      --set database.password=\\$DB_PASS
+                  "
                 '''
             }
         }
