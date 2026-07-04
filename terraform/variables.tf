@@ -42,3 +42,35 @@ variable "public_key_path" {
   type        = string
   description = "The local path to the SSH public key"
 }
+variable "db_name" {
+  type        = string
+  description = "The initial database name"
+}
+variable "db_username" {
+  type        = string
+  description = "The master username for the database"
+}
+variable "db_instance_class" {
+  type        = string
+  description = "The instance type for the RDS database"
+}
+variable "ecr_repository_names" {
+  type        = list(string)
+  description = "Names of the ECR repositories to create"
+}
+variable "node_instance_type" {
+  type        = string
+  description = "EC2 instance type for the EKS worker nodes"
+}
+variable "desired_nodes" {
+  type        = number
+  description = "Desired number of worker nodes"
+}
+variable "min_nodes" {
+  type        = number
+  description = "Minimum number of worker nodes"
+}
+variable "max_nodes" {
+  type        = number
+  description = "Maximum number of worker nodes"
+}
