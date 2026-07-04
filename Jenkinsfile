@@ -88,11 +88,9 @@ pipeline {
             }
         }
 
-        stage('6. Deploy to EKS via Helm') {
+stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                // Using single quotes (''') means zero backslash-escaping is needed.
-                // Standard Bash variables ($BUILD_NUMBER, $S3_BUCKET, etc.) work perfectly out of the box!
                 sh '''
                 # 1. Generate the EKS kubeconfig file in our workspace (using host .aws)
                 docker run --rm \
@@ -100,15 +98,15 @@ pipeline {
                   -v "${WORKSPACE}:/apps" \
                   amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
                 
-                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
-                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3 api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS (FIXED: s3api with no space)
+                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
                 # 3. Use the Helm container to deploy, mounting our generated kubeconfig
                 docker run --rm \
                   -v "${WORKSPACE}:/apps" \
                   -w /apps \
-                  alpine/helm:3.12.0 --kubeconfig /apps/kubeconfig upgrade --install nti-release ./helm \
+                  alpine/helm:3.12.0 upgrade --install nti-release ./helm --kubeconfig /apps/kubeconfig \
                   --set frontend.image.tag=$BUILD_NUMBER \
                   --set backend.image.tag=$BUILD_NUMBER \
                   --set s3_bucket_name=$S3_BUCKET \
@@ -116,7 +114,6 @@ pipeline {
                 '''
             }
         }
-    }
 
     post {
         success {
