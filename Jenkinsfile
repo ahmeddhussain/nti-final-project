@@ -6,7 +6,7 @@ pipeline {
     }
 
     environment {
-        AWS_ACCOUNT_ID = '800770414458' // Your verified AWS Account ID!
+        AWS_ACCOUNT_ID = '800770414458' // Your verified AWS Account ID
         AWS_REGION     = 'us-east-1'
         CLUSTER_NAME   = 'nti-eks-cluster'
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
@@ -88,9 +88,11 @@ pipeline {
             }
         }
 
-stage('6. Deploy to EKS via Helm') {
+        stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
+                // Using single quotes (''') means zero backslash-escaping is needed.
+                // Standard Bash variables ($BUILD_NUMBER, $S3_BUCKET, etc.) work perfectly out of the box!
                 sh '''
                 # 1. Generate the EKS kubeconfig file in our workspace (using host .aws)
                 docker run --rm \
@@ -98,7 +100,7 @@ stage('6. Deploy to EKS via Helm') {
                   -v "${WORKSPACE}:/apps" \
                   amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
                 
-                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS (FIXED: s3api with no space)
+                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
                 S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
@@ -114,6 +116,7 @@ stage('6. Deploy to EKS via Helm') {
                 '''
             }
         }
+    }
 
     post {
         success {
