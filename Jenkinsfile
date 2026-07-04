@@ -2,13 +2,15 @@ pipeline {
     agent any
 
     triggers {
-        cron('* * * * *') // SCM Polling: automatically checks GitHub every minute
+        cron('* * * * *') // SCM Polling: automatically checks GitHub every minute for changes
     }
 
     environment {
         AWS_ACCOUNT_ID = '800770414458' // Your verified AWS Account ID
         AWS_REGION     = 'us-east-1'
         CLUSTER_NAME   = 'nti-eks-cluster'
+        
+        // Static internal Docker gateway URL. Never changes on rebuild!
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
         
         FRONTEND_ECR   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-frontend-app"
@@ -25,7 +27,7 @@ pipeline {
 
         stage('2. SonarQube Quality Analysis') {
             steps {
-                echo 'Running Static Code Analysis via SonarQube Container...'
+                echo 'Running Static Code Analysis...'
                 sh """
                 docker run --rm \
                   -e SONAR_HOST_URL=${SONAR_HOST_URL} \
@@ -77,11 +79,7 @@ pipeline {
             steps {
                 echo 'Logging into AWS ECR and pushing images...'
                 sh """
-                docker run --rm \
-                  -v /home/ubuntu/.aws:/root/.aws \
-                  amazon/aws-cli ecr get-login-password --region ${AWS_REGION} | \
-                  docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                
+                aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
                 """
@@ -91,32 +89,21 @@ pipeline {
         stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                sh '''
-                # Use a single AWS CLI container to do EVERYTHING.
-                # We install Helm on the fly, fetch the secrets, and deploy.
-                docker run --rm \
-                  -v /home/ubuntu/.aws:/root/.aws \
-                  -v "${WORKSPACE}:/apps" \
-                  -w /apps \
-                  amazon/aws-cli bash -c "
-                    # 1. Install Helm quickly inside the container
-                    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-                    
-                    # 2. Generate the EKS kubeconfig
-                    aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
-                    
-                    # 3. Fetch variables
-                    S3_BUCKET=\\$(aws s3api list-buckets --query 'Buckets[?contains(Name, `access-logs`)].Name' --output text)
-                    DB_PASS=\\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '\\"password\\":\\"\\K[^\\"]+')
-                    
-                    # 4. Deploy using Helm with the generated config
-                    helm upgrade --install nti-release ./helm --kubeconfig /apps/kubeconfig \
-                      --set frontend.image.tag=$BUILD_NUMBER \
-                      --set backend.image.tag=$BUILD_NUMBER \
-                      --set s3_bucket_name=\\$S3_BUCKET \
-                      --set database.password=\\$DB_PASS
-                  "
-                '''
+                sh """
+                # 1. Update EKS Connection context natively
+                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                
+                # 2. Fetch variables dynamically from AWS
+                S3_BUCKET=\$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                
+                # 3. Deploy via Helm natively
+                helm upgrade --install nti-release ./helm \
+                  --set frontend.image.tag=${BUILD_NUMBER} \
+                  --set backend.image.tag=${BUILD_NUMBER} \
+                  --set s3_bucket_name=\$S3_BUCKET \
+                  --set database.password=\$DB_PASS
+                """
             }
         }
     }

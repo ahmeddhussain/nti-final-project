@@ -1,0 +1,54 @@
+---
+- name: Automate Jenkins Container Tool Setup & AWS Authentication
+  hosts: jenkins
+  become: true
+  vars_files:
+    - aws_secrets.yml
+  tasks:
+    - name: 1. Create .aws directory in shared Jenkins Volume
+      ansible.builtin.file:
+        path: /var/lib/docker/volumes/jenkins_home/_data/.aws
+        state: directory
+        mode: '0700'
+        owner: '1000' # Matches the internal UID of the jenkins user
+        group: '1000'
+
+    - name: 2. Inject AWS Credentials file
+      ansible.builtin.copy:
+        dest: /var/lib/docker/volumes/jenkins_home/_data/.aws/credentials
+        mode: '0600'
+        owner: '1000'
+        group: '1000'
+        content: |
+          [default]
+          aws_access_key_id = {{ aws_access_key_id }}
+          aws_secret_access_key = {{ aws_secret_access_key }}
+
+    - name: 3. Inject AWS Config file
+      ansible.builtin.copy:
+        dest: /var/lib/docker/volumes/jenkins_home/_data/.aws/config
+        mode: '0600'
+        owner: '1000'
+        group: '1000'
+        content: |
+          [default]
+          region = {{ aws_default_region }}
+          output = json
+
+    - name: 4. Update apt package index inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins apt-get update
+
+    - name: 5. Install AWS CLI inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins apt-get install -y awscli
+
+    - name: 6. Install Helm inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins sh -c "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+
+    - name: 7. Download Kubectl binary inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+
+    - name: 8. Install Kubectl inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+    - name: 9. Clean up temporary files inside Jenkins container
+      ansible.builtin.command: docker exec -u 0 jenkins rm -f kubectl
