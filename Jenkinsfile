@@ -2,8 +2,7 @@ pipeline {
     agent any
 
     triggers {
-        // SCM Polling: checks GitHub every minute, but ONLY builds if new code is pushed!
-        pollSCM('* * * * *')
+        pollSCM('* * * * *') // SCM Polling: automatically checks GitHub every minute for changes
     }
 
     environment {
@@ -90,47 +89,41 @@ pipeline {
         stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                sh '''
-                # 1. Generate the EKS kubeconfig file in our workspace (using host .aws)
-                docker run --rm \
-                  -v /home/ubuntu/.aws:/root/.aws \
-                  -v "${WORKSPACE}:/apps" \
-                  amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig
+                sh """
+                # 1. Update EKS Connection context natively
+                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
                 
-                # 2. Fetch the S3 Bucket Name and DB Password dynamically from AWS
-                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                # 2. Fetch variables dynamically from AWS
+                S3_BUCKET=\$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # 3. Use the Helm container to deploy, mounting our generated kubeconfig
-                # FIXED: We now dynamically pass the ECR repositories ($FRONTEND_ECR and $BACKEND_ECR) on-the-fly!
-                docker run --rm \
-                  -v "${WORKSPACE}:/apps" \
-                  -w /apps \
-                  alpine/helm:3.12.0 upgrade --install nti-release ./helm --kubeconfig /apps/kubeconfig \
-                  --set frontend.image.repository=$FRONTEND_ECR \
-                  --set backend.image.repository=$BACKEND_ECR \
-                  --set frontend.image.tag=$BUILD_NUMBER \
-                  --set backend.image.tag=$BUILD_NUMBER \
-                  --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS
-                '''
+                # 3. Deploy via Helm natively
+                # FIXED: We pass the real ECR repositories dynamically so Kubernetes pulls successfully!
+                helm upgrade --install nti-release ./helm \
+                  --set frontend.image.repository=${FRONTEND_ECR} \
+                  --set backend.image.repository=${BACKEND_ECR} \
+                  --set frontend.image.tag=${BUILD_NUMBER} \
+                  --set backend.image.tag=${BUILD_NUMBER} \
+                  --set s3_bucket_name=\$S3_BUCKET \
+                  --set database.password=\$DB_PASS
+                """
             }
         }
     }
 
     post {
         success {
-            echo 'Pipeline completed successfully!'
-            sh '''
+            echo 'Pipeline completed successfully! '
+            sh """
             # Fetch the public ELB DNS name dynamically from Kubernetes
-            ELB_URL=$(kubectl --kubeconfig kubeconfig get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            ELB_URL=\$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
             
             echo "=========================================================="
             echo "SUCCESS! Your application is live on AWS EKS!"
             echo "Access your live website here:"
-            echo "http://${ELB_URL}"
+            echo "http://\\\$ELB_URL"
             echo "=========================================================="
-            '''
+            """
         }
         failure {
             echo 'Pipeline failed. Please check the logs for errors. '
