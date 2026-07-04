@@ -32,3 +32,7 @@ variable "max_nodes" {
   type        = number
   description = "Maximum number of worker nodes for auto-scaling"
 }
+variable "jenkins_security_group_id" {
+  type        = string
+  description = "The ID of the Jenkins Security Group to allow EKS access"
+}

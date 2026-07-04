@@ -32,12 +32,13 @@ module "storage" {
   ecr_repository_names = var.ecr_repository_names
 }
 module "eks" {
-  source             = "./modules/eks"
-  environment        = var.environment
-  cluster_name       = var.cluster_name
-  private_subnet_ids = module.network.private_subnet_ids
-  node_instance_type = var.node_instance_type
-  desired_nodes      = var.desired_nodes
-  min_nodes          = var.min_nodes
-  max_nodes          = var.max_nodes
+  source                    = "./modules/eks"
+  environment               = var.environment
+  cluster_name              = var.cluster_name
+  private_subnet_ids        = module.network.private_subnet_ids
+  node_instance_type        = var.node_instance_type
+  desired_nodes             = var.desired_nodes
+  min_nodes                 = var.min_nodes
+  max_nodes                 = var.max_nodes
+  jenkins_security_group_id = module.compute.jenkins_sg_id 
 }
