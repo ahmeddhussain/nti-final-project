@@ -2,7 +2,8 @@ pipeline {
     agent any
 
     triggers {
-        cron('* * * * *') // SCM Polling: automatically checks GitHub every minute for changes
+        // SCM Polling: checks GitHub every minute, but ONLY builds if new code is pushed!
+        pollSCM('* * * * *')
     }
 
     environment {
@@ -89,28 +90,38 @@ pipeline {
         stage('6. Deploy to EKS via Helm') {
             steps {
                 echo 'Deploying application to EKS cluster...'
-                sh """
+                sh '''
                 # 1. Update EKS Connection context natively
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig kubeconfig
                 
                 # 2. Fetch variables dynamically from AWS
-                S3_BUCKET=\$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=\$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
                 # 3. Deploy via Helm natively
-                helm upgrade --install nti-release ./helm \
-                  --set frontend.image.tag=${BUILD_NUMBER} \
-                  --set backend.image.tag=${BUILD_NUMBER} \
-                  --set s3_bucket_name=\$S3_BUCKET \
-                  --set database.password=\$DB_PASS
-                """
+                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                  --set frontend.image.tag=$BUILD_NUMBER \
+                  --set backend.image.tag=$BUILD_NUMBER \
+                  --set s3_bucket_name=$S3_BUCKET \
+                  --set database.password=$DB_PASS
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'Pipeline completed successfully! Application is live on EKS! '
+            echo 'Pipeline completed successfully!'
+            sh '''
+            # Fetch the public ELB DNS name dynamically from Kubernetes
+            ELB_URL=$(kubectl --kubeconfig kubeconfig get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            
+            echo "=========================================================="
+            echo "SUCCESS! Your application is live on AWS EKS!"
+            echo "Access your live website here:"
+            echo "http://${ELB_URL}"
+            echo "=========================================================="
+            '''
         }
         failure {
             echo 'Pipeline failed. Please check the logs for errors. '
