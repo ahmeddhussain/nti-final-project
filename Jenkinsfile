@@ -9,6 +9,10 @@ pipeline {
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
         FRONTEND_ECR   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-frontend-app"
         BACKEND_ECR    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-backend-app"
+        
+        // FIX: Explicitly tell AWS CLI where the mounted credentials are!
+        AWS_SHARED_CREDENTIALS_FILE = '/var/jenkins_home/.aws/credentials'
+        AWS_CONFIG_FILE = '/var/jenkins_home/.aws/config'
     }
 
     stages {

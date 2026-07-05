@@ -5,13 +5,16 @@
   vars_files:
     - aws_secrets.yml
   tasks:
-    - name: 1. Install unzip package (required for AWS CLI installer)
+    - name: 1. Install prerequisites (unzip, curl, git)
       ansible.builtin.apt:
-        name: unzip
+        name:
+          - unzip
+          - curl
+          - git
         state: present
         update_cache: true
 
-    - name: 2. Create .aws directory on the host machine
+    - name: 2. Setup AWS Configuration Directory
       ansible.builtin.file:
         path: /home/ubuntu/.aws
         state: directory
@@ -19,7 +22,7 @@
         owner: ubuntu
         group: ubuntu
 
-    - name: 3. Inject AWS Credentials on the host machine (Automates aws configure)
+    - name: 3. Inject AWS Credentials (Automates aws configure)
       ansible.builtin.copy:
         dest: /home/ubuntu/.aws/credentials
         mode: '0600'
@@ -30,7 +33,7 @@
           aws_access_key_id = {{ aws_access_key_id }}
           aws_secret_access_key = {{ aws_secret_access_key }}
 
-    - name: 4. Inject AWS Config on the host machine
+    - name: 4. Inject AWS Default Region Config
       ansible.builtin.copy:
         dest: /home/ubuntu/.aws/config
         mode: '0600'
@@ -41,50 +44,44 @@
           region = {{ aws_default_region }}
           output = json
 
-    - name: 5. Download AWS CLI v2 Installer on host machine
-      ansible.builtin.get_url:
-        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
-        dest: /tmp/awscliv2.zip
-        mode: '0644'
-
-    - name: 6. Unzip AWS CLI Installer on host machine
+    - name: 5. Download and Unarchive AWS CLI v2
       ansible.builtin.unarchive:
-        src: /tmp/awscliv2.zip
+        src: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
         dest: /tmp
         remote_src: true
+        creates: /tmp/aws/install # Skips download if already unzipped
 
-    - name: 7. Install AWS CLI v2 on host machine natively
+    - name: 6. Install AWS CLI v2
       ansible.builtin.command: /tmp/aws/install --update
       args:
-        creates: /usr/local/bin/aws
+        creates: /usr/local/bin/aws # Skips install if AWS is already installed
 
-    - name: 8. Download Kubectl binary on host machine
+    - name: 7. Download and Install Kubectl
       ansible.builtin.get_url:
         url: https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
         dest: /usr/local/bin/kubectl
         mode: '0755'
+        owner: root
 
-    - name: 9. Download Helm Installer on host machine
-      ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-        dest: /tmp/get_helm.sh
-        mode: '0755'
-
-    - name: 10. Install Helm on host machine natively
-      ansible.builtin.command: /tmp/get_helm.sh
+    - name: 8. Download and Install Helm 3
+      ansible.builtin.shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       args:
-        creates: /usr/local/bin/helm
+        creates: /usr/local/bin/helm # Skips if Helm is already installed
 
-    - name: 11. Clean up temporary installer files on host machine
+    - name: 9. Clean up temporary installer artifacts
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - /tmp/awscliv2.zip
         - /tmp/aws
+        - /tmp/awscliv2.zip
         - /tmp/get_helm.sh
 
-    - name: 12. Delete any corrupt kubeconfig directory on the host machine
+    - name: 10. Delete any corrupt workspace directories (Host Cleanup)
       ansible.builtin.file:
-        path: /var/lib/docker/volumes/jenkins_home/_data/workspace/nti-final-project_main/kubeconfig
+        path: "{{ item }}"
         state: absent
+      loop:
+        - /var/lib/docker/volumes/jenkins_home/_data/workspace/nti-final-project_main/kubeconfig
+      ignore_errors: true
