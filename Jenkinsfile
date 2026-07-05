@@ -97,7 +97,7 @@ pipeline {
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # 3. Deploy application via Helm natively
+                # 3. Deploy your Application SECOND (EKS now knows what a 'PrometheusRule' is!)
                 helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
                   --set frontend.image.tag=$BUILD_NUMBER \
                   --set backend.image.tag=$BUILD_NUMBER \
@@ -109,12 +109,16 @@ pipeline {
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                # 5. Automatically deploy Prometheus & Grafana (ClusterIP keeps it secure & free)
+                # 5. Automatically deploy Prometheus & Grafana
+                # FIXED: We disable the heavy admission webhooks to bypass the pre-upgrade timeout entirely!
                 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
                   --namespace monitoring \
                   --create-namespace \
                   --set grafana.adminPassword="admin" \
-                  --set alertmanager.enabled=true
+                  --set alertmanager.enabled=true \
+                  --set prometheusOperator.admissionWebhooks.enabled=false \
+                  --set prometheusOperator.admissionWebhooks.patch.enabled=false \
+                  --set prometheusOperator.tls.enabled=false
                 
                 # 6. Automatically deploy Loki (Loki Stack for Logs)
                 helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig \
