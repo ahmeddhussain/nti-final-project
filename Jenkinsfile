@@ -108,20 +108,20 @@ pipeline {
     post {
         success {
             script {
-                def kubeconfig = "${env.WORKSPACE}/kubeconfig"
                 def elbUrl = sh(
-                    script: """
-                    export KUBECONFIG='${kubeconfig}'
+                    script: '''
+                    set -e
+                    export KUBECONFIG="$WORKSPACE/kubeconfig"
                     for i in $(seq 1 30); do
                       ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-                      if [ -n \"$ELB_URL\" ]; then
-                        echo \"$ELB_URL\"
+                      if [ -n "$ELB_URL" ]; then
+                        echo "$ELB_URL"
                         exit 0
                       fi
                       sleep 10
                     done
                     exit 0
-                    """,
+                    ''',
                     returnStdout: true
                 ).trim()
 
