@@ -79,7 +79,6 @@ pipeline {
             steps {
                 echo 'Logging into AWS ECR and pushing images...'
                 sh """
-                # NATIVE COMMAND: Uses the tools installed by your Ansible playbook
                 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
@@ -91,20 +90,20 @@ pipeline {
             steps {
                 echo 'Deploying application and monitoring stack to EKS cluster...'
                 sh '''
-                # 1. Update EKS Connection context natively
+                # 1. Update EKS Connection context natively (Writes to ~/.kube/config)
                 aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
                 
-                # 2. Fetch variables dynamically from AWS natively
+                # 2. Fetch variables dynamically from AWS
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
                 
-                # 3. Add official Prometheus & Grafana Repositories natively
+                # 3. Add official Prometheus & Grafana Repositories
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                # 4. Deploy Prometheus & Grafana FIRST (Registers the Custom Resource Definitions!)
+                # 4. Deploy Prometheus & Grafana FIRST 
                 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
                   --namespace monitoring \
                   --create-namespace \
@@ -119,7 +118,7 @@ pipeline {
                   --namespace monitoring \
                   --set loki.persistence.enabled=false
                 
-                # 6. Deploy your Application SECOND (With ECR repositories & RDS URL mapped correctly!)
+                # 6. Deploy your Application SECOND
                 helm upgrade --install nti-release ./helm \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
@@ -151,11 +150,12 @@ pipeline {
             # 3. AUTOMATION: Destroy any old background tunnels to prevent port conflicts
             docker rm -f grafana-tunnel || true
             
-            # 4. AUTOMATION: Launch our custom, fully authenticated aws+kubectl tunnel in host network mode
+            # 4. AUTOMATION: Launch our custom, fully authenticated tunnel in host network mode
+            # FIXED: Points exactly to the /home/ubuntu/.aws folder created by Ansible!
             docker run -d \
               --name grafana-tunnel \
               --network host \
-              -v /var/lib/docker/volumes/jenkins_home/_data/.aws:/root/.aws \
+              -v /home/ubuntu/.aws:/root/.aws \
               -v /var/lib/docker/volumes/jenkins_home/_data/.kube:/root/.kube \
               --entrypoint "" \
               amazon/aws-cli bash -c "
