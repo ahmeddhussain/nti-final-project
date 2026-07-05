@@ -43,8 +43,8 @@ pipeline {
             steps {
                 sh '''
                 # 1. Prepare Connection - Clean and regenerate kubeconfig
-                rm -rf $WORKSPACE/kubeconfig
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig
+                rm -f $WORKSPACE/kubeconfig.yaml
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig.yaml
                 
                 # 2. Fetch Secrets
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
@@ -56,17 +56,17 @@ pipeline {
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig $WORKSPACE/kubeconfig \
+                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig $WORKSPACE/kubeconfig.yaml \
                   --namespace monitoring --create-namespace \
                   --set grafana.adminPassword="admin" \
                   --set prometheusOperator.admissionWebhooks.enabled=false \
                   --set prometheusOperator.admissionWebhooks.patch.enabled=false \
                   --set prometheusOperator.tls.enabled=false
                 
-                helm upgrade --install loki grafana/loki-stack --kubeconfig $WORKSPACE/kubeconfig --namespace monitoring --set loki.persistence.enabled=false
+                helm upgrade --install loki grafana/loki-stack --kubeconfig $WORKSPACE/kubeconfig.yaml --namespace monitoring --set loki.persistence.enabled=false
 
                 # 4. Deploy Application
-                helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig \
+                helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig.yaml \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
                   --set frontend.image.tag=$BUILD_NUMBER \
@@ -82,7 +82,7 @@ pipeline {
             steps {
                 sh '''
                 set +e
-                export KUBECONFIG="$WORKSPACE/kubeconfig"
+                export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
 
                 # Diagnostic: Check pod status
                 echo "Checking Grafana pod status..."
@@ -118,7 +118,7 @@ pipeline {
                 def elbUrl = sh(
                     script: '''
                     set -e
-                    export KUBECONFIG="$WORKSPACE/kubeconfig"
+                    export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
                     for i in $(seq 1 30); do
                       ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
                       if [ -n "$ELB_URL" ]; then
