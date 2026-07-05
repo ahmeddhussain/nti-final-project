@@ -78,34 +78,27 @@ pipeline {
             }
         }
 
-        stage('6. Expose Grafana') {
+        stage('6. Setup Complete') {
             steps {
                 sh '''
-                set +e
                 export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
-
-                # Diagnostic: Check pod status
-                echo "Checking Grafana pod status..."
-                kubectl -n monitoring get pods -l app.kubernetes.io/name=grafana -o wide 2>&1 || true
-                echo ""
-                
-                # Diagnostic: Check pod logs (last 10 lines)
-                echo "Recent Grafana pod logs:"
-                kubectl -n monitoring logs -l app.kubernetes.io/name=grafana --tail=10 2>&1 || true
-                echo ""
-
                 HOST_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
-                pkill -f "kubectl port-forward.*prometheus-grafana" || true
-                sleep 2
-
-                # Start the port-forward in the background
-                nohup kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 > grafana-port-forward.log 2>&1 &
-                sleep 3
-
+                
                 echo "----------------------------------------------------------"
-                echo "GRAFANA URL: http://${HOST_IP}:3000"
-                echo "(Admin: admin / Password: admin)"
-                echo "Note: Grafana may take a few minutes to fully initialize."
+                echo "DEPLOYMENT COMPLETE!"
+                echo "----------------------------------------------------------"
+                echo ""
+                echo "TO ACCESS GRAFANA MONITORING:"
+                echo "1. Run this command on your Jenkins host:"
+                echo "   kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80"
+                echo ""
+                echo "2. Then open: http://localhost:3000"
+                echo "   Username: admin"
+                echo "   Password: admin"
+                echo ""
+                echo "OR access from remote machine:"
+                echo "   ssh -L 3000:localhost:3000 ubuntu@${HOST_IP}"
+                echo "   Then open: http://localhost:3000"
                 echo "----------------------------------------------------------"
                 '''
             }
