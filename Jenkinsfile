@@ -43,7 +43,7 @@ pipeline {
             steps {
                 sh '''
                 # 1. Prepare Connection
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig kubeconfig
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig
                 
                 # 2. Fetch Secrets
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
@@ -55,17 +55,17 @@ pipeline {
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
+                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig $WORKSPACE/kubeconfig \
                   --namespace monitoring --create-namespace \
                   --set grafana.adminPassword="admin" \
                   --set prometheusOperator.admissionWebhooks.enabled=false \
                   --set prometheusOperator.admissionWebhooks.patch.enabled=false \
                   --set prometheusOperator.tls.enabled=false
                 
-                helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig --namespace monitoring --set loki.persistence.enabled=false
+                helm upgrade --install loki grafana/loki-stack --kubeconfig $WORKSPACE/kubeconfig --namespace monitoring --set loki.persistence.enabled=false
 
                 # 4. Deploy Application
-                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
                   --set frontend.image.tag=$BUILD_NUMBER \
@@ -80,26 +80,29 @@ pipeline {
         stage('6. Expose Grafana') {
             steps {
                 sh '''
-                set -e
+                set +e
                 export KUBECONFIG="$WORKSPACE/kubeconfig"
                 export AWS_SHARED_CREDENTIALS_FILE=/var/jenkins_home/.aws/credentials
                 export AWS_CONFIG_FILE=/var/jenkins_home/.aws/config
 
                 HOST_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
+                kubectl -n monitoring get svc prometheus-grafana >/dev/null 2>&1 || true
+
                 pkill -f "kubectl port-forward.*prometheus-grafana" || true
-
                 nohup kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 > grafana-port-forward.log 2>&1 &
+                sleep 8
 
-                for i in $(seq 1 20); do
-                  if curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1; then
-                    break
-                  fi
-                  sleep 5
-                done
-
-                echo "----------------------------------------------------------"
-                echo "GRAFANA URL: http://${HOST_IP}:3000"
-                echo "----------------------------------------------------------"
+                if curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1; then
+                  echo "----------------------------------------------------------"
+                  echo "GRAFANA URL: http://${HOST_IP}:3000"
+                  echo "----------------------------------------------------------"
+                else
+                  echo "----------------------------------------------------------"
+                  echo "Grafana port-forward was started, but the UI did not become reachable yet."
+                  echo "Check the logs at $WORKSPACE/grafana-port-forward.log"
+                  echo "GRAFANA URL (if available): http://${HOST_IP}:3000"
+                  echo "----------------------------------------------------------"
+                fi
                 '''
             }
         }
