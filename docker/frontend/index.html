@@ -32,7 +32,8 @@
 
     <script>
         // On EKS, this connects via relative path or local service. We use standard port 5000.
-        const API_URL = 'http://' + window.location.hostname + ':5000/api';
+        const API_URL = '/api';
+
 
         // Check Connection Status
         fetch(`${API_URL}/status`)
