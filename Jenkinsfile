@@ -79,6 +79,7 @@ pipeline {
             steps {
                 echo 'Logging into AWS ECR and pushing images...'
                 sh """
+                # NATIVE COMMAND: Uses the tools installed by your Ansible playbook
                 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
@@ -93,14 +94,12 @@ pipeline {
                 # 1. Update EKS Connection context natively
                 aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
                 
-                # 2. Fetch variables dynamically from AWS
+                # 2. Fetch variables dynamically from AWS natively
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
-                
-                # NEW: Fetch your active RDS Database Host dynamically!
                 DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
                 
-                # 3. Add official Prometheus & Grafana Repositories
+                # 3. Add official Prometheus & Grafana Repositories natively
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
@@ -153,19 +152,15 @@ pipeline {
             docker rm -f grafana-tunnel || true
             
             # 4. AUTOMATION: Launch our custom, fully authenticated aws+kubectl tunnel in host network mode
-            # (Fixed: Mounts the permanent .kube directory directly into /root/.kube)
             docker run -d \
               --name grafana-tunnel \
               --network host \
-              -v /home/ubuntu/.aws:/root/.aws \
+              -v /var/lib/docker/volumes/jenkins_home/_data/.aws:/root/.aws \
               -v /var/lib/docker/volumes/jenkins_home/_data/.kube:/root/.kube \
               --entrypoint "" \
               amazon/aws-cli bash -c "
-                # Install kubectl on the fly inside the container
                 curl -fsSL -LO https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
                 chmod +x kubectl
-                
-                # Start the native port-forward using EKS authentication
                 ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
               "
             

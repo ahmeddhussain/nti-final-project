@@ -1,9 +1,9 @@
 ---
-- name: Install Docker and Run Jenkins Container
+- name: Install Docker and Launch Jenkins Container
   hosts: jenkins
   become: true
   tasks:
-    - name: 1. Install prerequisites
+    - name: 1. Install system prerequisites
       ansible.builtin.apt:
         name:
           - apt-transport-https
@@ -22,7 +22,7 @@
       ansible.builtin.shell: |
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
 
-    - name: 4. Update package index and install Docker
+    - name: 4. Install Docker CE
       ansible.builtin.apt:
         name:
           - docker-ce
@@ -43,12 +43,27 @@
         groups: docker
         append: true
 
-    - name: 7. Set permissive permissions on docker.sock (Crucial for Jenkins Container)
+    - name: 7. Set permissive permissions on docker.sock
       ansible.builtin.file:
         path: /var/run/docker.sock
         mode: '0777'
 
-    - name: 8. Launch Jenkins LTS Container (with mounted Docker socket)
+    # PREVENTS DOCKER MOUNT BUGS: Pre-creates the host paths as files/folders before Docker runs
+    - name: 8. Pre-create tool directories and files on host
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: "{{ item.state }}"
+        mode: '0755'
+        owner: ubuntu
+        group: ubuntu
+      loop:
+        - { path: '/home/ubuntu/.aws', state: 'directory' }
+        - { path: '/usr/local/aws-cli', state: 'directory' }
+        - { path: '/usr/local/bin/aws', state: 'touch' }
+        - { path: '/usr/local/bin/helm', state: 'touch' }
+        - { path: '/usr/local/bin/kubectl', state: 'touch' }
+
+    - name: 9. Launch Jenkins LTS Container with Host Tool Volume Mounts
       ansible.builtin.shell: |
         docker run -p 8080:8080 -p 50000:50000 -d \
           --name jenkins \
@@ -56,18 +71,24 @@
           -v jenkins_home:/var/jenkins_home \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v /usr/bin/docker:/usr/bin/docker \
+          -v /home/ubuntu/.aws:/var/jenkins_home/.aws \
+          -v /usr/local/bin/helm:/usr/local/bin/helm \
+          -v /usr/local/bin/kubectl:/usr/local/bin/kubectl \
+          -v /usr/local/bin/aws:/usr/local/bin/aws \
+          -v /usr/local/aws-cli:/usr/local/aws-cli \
           jenkins/jenkins:lts
       ignore_errors: true
 
-    - name: 9. Pause for 20 seconds to allow Jenkins to initialize and generate password
-      ansible.builtin.pause:
-        seconds: 20
-
-    - name: 10. Retrieve Jenkins Initiation Password
-      ansible.builtin.shell: |
-        docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+    # DYNAMIC RETRIES: Polls every 5 seconds until the password file is generated
+    - name: 10. Retrieve Jenkins Initiation Password (with dynamic retries)
+      ansible.builtin.command: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
       register: jenkins_password
+      until: jenkins_password.rc == 0
+      retries: 12 # Retries up to 12 times (1 minute total)
+      delay: 5    # Waits 5 seconds between retries
+      ignore_errors: true # Prevents crashes on subsequent runs if Jenkins already deleted the file
 
     - name: 11. SHOW JENKINS INITIAL ADMIN PASSWORD
       ansible.builtin.debug:
         msg: "SUCCESS! Your Jenkins Initial Admin Password is: {{ jenkins_password.stdout }}"
+      when: jenkins_password.rc == 0
