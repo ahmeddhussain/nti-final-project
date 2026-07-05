@@ -31,11 +31,8 @@ pipeline {
 
         stage('4. Push to ECR') {
             steps {
-                // FIX: uses the native "aws" CLI installed inside the Jenkins
+                // Uses the native "aws" CLI installed inside the Jenkins
                 // container instead of a sidecar "amazon/aws-cli" container.
-                // This stage happened to work before because it never wrote
-                // a file back into $WORKSPACE, but it's changed here too for
-                // consistency with stage 5's real fix below.
                 sh """
                 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
@@ -46,20 +43,10 @@ pipeline {
 
         stage('5. Deploy App') {
             steps {
-                // FIX (the actual bug): the old version ran
-                // "docker run -v $WORKSPACE:/apps amazon/aws-cli ..." via the
-                // mounted docker.sock. Since that docker command is executed
-                // by the HOST's Docker daemon (not nested inside Jenkins),
-                // $WORKSPACE was interpreted as a HOST path, not the path
-                // Jenkins itself sees — they are NOT the same location
-                // (jenkins_home is a named volume; its real host path is
-                // under /var/lib/docker/volumes/jenkins_home/_data/...).
-                // Docker silently created an empty, disconnected directory
-                // on the host, wrote the kubeconfig there, and it was never
-                // visible to Jenkins or Helm. Using the NATIVE aws CLI here
-                // (already installed inside the Jenkins container) writes
-                // directly to the real $WORKSPACE with no path translation
-                // and no sidecar container involved at all.
+                // Uses the native aws CLI (already installed inside the
+                // Jenkins container) so the kubeconfig is written directly
+                // to the real $WORKSPACE with no docker-sidecar path
+                // translation issues.
                 sh '''
                 set -e
                 rm -f $WORKSPACE/kubeconfig.yaml
@@ -87,7 +74,50 @@ pipeline {
             }
         }
 
-        stage('6. Deployment Complete') {
+        // NEW STAGE: deploys Prometheus + Grafana + Loki using the values
+        // files checked into this repo under monitoring/. Uses
+        // "helm upgrade --install" so it is safe to run on every build --
+        // if nothing changed, Helm does nothing. Grafana is exposed via
+        // LoadBalancer (same mechanism already used for the app frontend),
+        // which requires NO Terraform or security group changes. Loki is
+        // registered as a Grafana data source automatically via the
+        // additionalDataSources setting in monitoring/values-prometheus.yaml
+        // -- no manual "Add data source" step is needed after a rebuild.
+        stage('6. Deploy Monitoring Stack') {
+            steps {
+                sh '''
+                set -e
+                helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+                helm repo add grafana https://grafana.github.io/helm-charts --force-update
+                helm repo update
+
+                kubectl --kubeconfig $WORKSPACE/kubeconfig.yaml create namespace monitoring --dry-run=client -o yaml | kubectl --kubeconfig $WORKSPACE/kubeconfig.yaml apply -f -
+
+                helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+                  --kubeconfig $WORKSPACE/kubeconfig.yaml \
+                  --namespace monitoring \
+                  -f monitoring/values-prometheus.yaml \
+                  --wait --timeout 10m
+
+                helm upgrade --install loki-stack grafana/loki-stack \
+                  --kubeconfig $WORKSPACE/kubeconfig.yaml \
+                  --namespace monitoring \
+                  -f monitoring/values-loki.yaml \
+                  --wait --timeout 10m
+
+                echo "----------------------------------------------------------"
+                echo "GRAFANA ADMIN PASSWORD (user: admin):"
+                kubectl --kubeconfig $WORKSPACE/kubeconfig.yaml get secret \
+                  --namespace monitoring \
+                  -l app.kubernetes.io/component=admin-secret \
+                  -o jsonpath="{.items[0].data.admin-password}" | base64 --decode
+                echo ""
+                echo "----------------------------------------------------------"
+                '''
+            }
+        }
+
+        stage('7. Deployment Complete') {
             steps {
                 sh '''
                 echo "----------------------------------------------------------"
@@ -101,6 +131,7 @@ pipeline {
     post {
         success {
             script {
+                // --- App frontend ELB (existing, unchanged logic) ---
                 def elbUrl = sh(
                     script: '''
                     set -e
@@ -118,8 +149,6 @@ pipeline {
                         fi
                       fi
 
-                      # Debug/status noise goes to stderr so it never
-                      # contaminates the stdout value Jenkins captures below.
                       echo "Waiting for frontend LoadBalancer..." >&2
                       kubectl get svc -A >&2 2>/dev/null || true
                       kubectl get pods -A >&2 2>/dev/null || true
@@ -133,8 +162,6 @@ pipeline {
                     returnStdout: true
                 ).trim()
 
-                // Defensive: keep only the last non-empty line, in case
-                // anything still leaks through onto stdout.
                 if (elbUrl) {
                     elbUrl = elbUrl.readLines().findAll { it.trim() }.last().trim()
                 }
@@ -144,6 +171,39 @@ pipeline {
                     currentBuild.description = "App URL: http://${elbUrl}"
                 } else {
                     echo "Frontend ELB URL is still not ready."
+                }
+
+                // --- NEW: Grafana ELB (separate, independent lookup, same
+                // pattern as above. Kept fully separate from the frontend
+                // logic above so a Grafana lookup issue can never affect
+                // the app URL reporting that already works. ---
+                def grafanaUrl = sh(
+                    script: '''
+                    set -e
+                    export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
+                    for i in $(seq 1 40); do
+                      GRAFANA_HOST=$(kubectl get svc kube-prometheus-stack-grafana -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+                      if [ -n "$GRAFANA_HOST" ]; then
+                        echo "$GRAFANA_HOST"
+                        exit 0
+                      fi
+                      echo "Waiting for Grafana LoadBalancer..." >&2
+                      sleep 15
+                    done
+                    exit 0
+                    ''',
+                    returnStdout: true
+                ).trim()
+
+                if (grafanaUrl) {
+                    grafanaUrl = grafanaUrl.readLines().findAll { it.trim() }.last().trim()
+                }
+
+                if (grafanaUrl) {
+                    echo "GRAFANA URL: http://${grafanaUrl} (user: admin)"
+                    currentBuild.description = "${currentBuild.description ?: ''} | Grafana: http://${grafanaUrl}"
+                } else {
+                    echo "Grafana LoadBalancer URL is still not ready."
                 }
             }
         }
