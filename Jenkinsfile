@@ -134,7 +134,6 @@ pipeline {
             echo 'Pipeline completed successfully! 🎉'
             sh '''
             # 1. Fetch the public ELB DNS name dynamically for the Frontend app
-            # (We use a robust while-loop to wait for AWS to generate the DNS)
             ELB_URL=""
             while [ -z "$ELB_URL" ]; do
               echo "Waiting for AWS to assign Public ELB DNS..."
@@ -148,13 +147,13 @@ pipeline {
             # 3. AUTOMATION: Destroy any old background tunnels to prevent port conflicts
             docker rm -f grafana-tunnel || true
             
-            # 4. AUTOMATION: Launch a tiny helper container to silently tunnel Grafana to host port 3000
+            # 4. AUTOMATION: Launch a tiny helper container pointing to the stable host volume path
             docker run -d \
               --name grafana-tunnel \
               --network host \
-              -v "$(pwd)/kubeconfig:/config" \
+              -v /var/lib/docker/volumes/jenkins_home/_data/.kube:/config \
               bitnami/kubectl:latest \
-              --kubeconfig /config port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
+              --kubeconfig /config/config port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
             
             echo ""
             echo "=========================================================="
@@ -173,4 +172,3 @@ pipeline {
             echo 'Pipeline failed. Please check the logs for errors. ❌'
         }
     }
-}
