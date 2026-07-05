@@ -39,61 +39,36 @@ pipeline {
             }
         }
 
-        stage('5. Deploy App & Monitoring') {
+        stage('5. Deploy App') {
             steps {
                 sh '''
-                set -e
-
-                rm -f "$WORKSPACE/kubeconfig.yaml"
-                aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" --kubeconfig "$WORKSPACE/kubeconfig.yaml"
-
+                # 1. Prepare Connection - Clean and regenerate kubeconfig
+                rm -f $WORKSPACE/kubeconfig.yaml
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig.yaml
+                
+                # 2. Fetch Secrets
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
 
-                chmod +x "$WORKSPACE/scripts/bootstrap-monitoring.sh"
-                "$WORKSPACE/scripts/bootstrap-monitoring.sh" "$WORKSPACE/kubeconfig.yaml"
-
-                helm upgrade --install nti-release "$WORKSPACE/helm" --kubeconfig "$WORKSPACE/kubeconfig.yaml" \
-                  --namespace default \
-                  --set frontend.image.repository="$FRONTEND_ECR" \
-                  --set backend.image.repository="$BACKEND_ECR" \
-                  --set frontend.image.tag="$BUILD_NUMBER" \
-                  --set backend.image.tag="$BUILD_NUMBER" \
-                  --set s3_bucket_name="$S3_BUCKET" \
-                  --set database.password="$DB_PASS" \
-                  --set database.host="$DB_HOST"
+                # 3. Deploy Application
+                helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig.yaml \
+                  --set frontend.image.repository=$FRONTEND_ECR \
+                  --set backend.image.repository=$BACKEND_ECR \
+                  --set frontend.image.tag=$BUILD_NUMBER \
+                  --set backend.image.tag=$BUILD_NUMBER \
+                  --set s3_bucket_name=$S3_BUCKET \
+                  --set database.password=$DB_PASS \
+                  --set database.host=$DB_HOST
                 '''
             }
         }
 
-        stage('6. Setup Complete') {
+        stage('6. Deployment Complete') {
             steps {
                 sh '''
-                set -e
-                export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
-
                 echo "----------------------------------------------------------"
                 echo "DEPLOYMENT COMPLETE!"
-                echo "----------------------------------------------------------"
-                echo ""
-
-                GRAFANA_URL=""
-                for i in $(seq 1 30); do
-                  GRAFANA_URL=$(kubectl get svc -n monitoring grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-                  if [ -n "$GRAFANA_URL" ]; then
-                    break
-                  fi
-                  sleep 10
-                done
-
-                if [ -n "$GRAFANA_URL" ]; then
-                  echo "GRAFANA URL: http://$GRAFANA_URL"
-                else
-                  echo "Grafana is still provisioning a public address."
-                fi
-                echo "Username: admin"
-                echo "Password: admin"
                 echo "----------------------------------------------------------"
                 '''
             }
