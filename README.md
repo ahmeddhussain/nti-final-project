@@ -1,4 +1,3 @@
-
 # NTI Final Project
 
 A complete DevOps project that provisions AWS infrastructure, configures a Jenkins CI/CD pipeline, builds and scans container images, and deploys a web application to Amazon EKS using Helm.
@@ -17,6 +16,7 @@ This repository demonstrates a modern cloud-native workflow using Terraform, Ans
 - [Jenkins & Ansible Setup](#jenkins--ansible-setup)
 - [CI/CD Pipeline (Jenkinsfile)](#cicd-pipeline-jenkinsfile)
 - [Helm Deployment & Values](#helm-deployment--values)
+- [Monitoring (Prometheus, Grafana & Loki)](#monitoring-prometheus-grafana--loki)
 - [Troubleshooting](#troubleshooting)
 
 
@@ -44,7 +44,7 @@ ansible-playbook -i ansible/inventory.ini ansible/sonarqube.yml
 
 3. Push code or trigger Jenkins job Manually.
 
-4. After a successful run the Jenkins job prints the frontend ELB hostname in the build output.
+4. After a successful run the Jenkins job prints the frontend ELB hostname in the build output, along with the Grafana URL and admin password.
 
 ---
 
@@ -63,6 +63,8 @@ flowchart LR
   EKS --> Frontend
   EKS --> Backend
   Backend --> RDS[Amazon RDS]
+  Jenkins --> Monitoring[Prometheus + Grafana + Loki]
+  Monitoring --> EKS
 ```
 
 Key infrastructure provisioned by Terraform:
@@ -84,6 +86,7 @@ Top-level folders and purpose:
 ansible/    # playbooks to configure Jenkins host and tools
 docker/     # local compose and image sources
 helm/       # Helm chart (frontend, backend, services, secrets)
+monitoring/ # Helm values overrides for Prometheus, Grafana & Loki
 terraform/  # IaC for AWS resources and modules
 Jenkinsfile # CI/CD pipeline definition
 ```
@@ -148,7 +151,8 @@ Stages (summary):
 4. Push images to Amazon ECR
 5. Generate kubeconfig & fetch secrets
 6. Deploy Helm chart to EKS
-7. Post-success: detect frontend ELB hostname and print the app URL
+7. Deploy monitoring stack (Prometheus, Grafana & Loki) to EKS
+8. Post-success: detect frontend ELB hostname, Grafana ELB hostname, and Grafana admin password, and print them in the build output
 
 Notes:
 - The pipeline uses `aws eks update-kubeconfig` to generate the kubeconfig file for Helm/kubectl.
@@ -187,12 +191,46 @@ helm upgrade --install nti-release ./helm --set frontend.image.repository=... --
 
 ---
 
+## Monitoring (Prometheus, Grafana & Loki)
+
+- The monitoring stack is installed from the public `prometheus-community/kube-prometheus-stack` and `grafana/loki-stack` Helm repositories (not a local chart), configured with the values files under `monitoring/`.
+- `monitoring/values-prometheus.yaml` configures Prometheus and Grafana, and registers Loki as a Grafana data source automatically via `additionalDataSources` 
+- `monitoring/values-loki.yaml` configures Loki and Promtail (log collection agent).
+- Grafana is exposed via a `LoadBalancer` service, the same mechanism already used for the app's frontend but it can be changed depending on your requirements.
+- Prometheus, Alertmanager, and Loki remain internal (`ClusterIP`) and are never exposed to the internet.
+
+
+The pipeline installs the monitoring stack automatically on every run:
+
+```bash
+helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  -f monitoring/values-prometheus.yaml \
+  --wait --timeout 10m
+
+helm upgrade --install loki-stack grafana/loki-stack \
+  --namespace monitoring \
+  -f monitoring/values-loki.yaml \
+  --wait --timeout 10m
+```
+
+Get the Grafana admin password manually if needed:
+
+```bash
+kubectl get secret --namespace monitoring -l app.kubernetes.io/component=admin-secret -o jsonpath="{.items[0].data.admin-password}" | base64 --decode ; echo
+```
+
+The Grafana URL and admin password are also printed automatically at the end of every successful Jenkins build. `Testing environment not recommended on production`
+
+---
+
 ## Troubleshooting
 
 - Kubeconfig errors: ensure IAM credentials used by Jenkins have `eks:DescribeCluster` and related permissions.
 - ECR push errors: ensure the ECR repository exists and the Jenkins host can authenticate.
 - Helm timeouts: increase Helm/cluster timeouts or disable problematic webhooks for heavy charts.
 - ELB not ready: AWS provisioning of LoadBalancers can take several minutes—check `kubectl get svc`.
+- Monitoring pods stuck `Pending`: usually means the node(s) don't have enough CPU/memory headroom — check with `kubectl describe nodes | grep -A 8 "Allocated resources"`.
 
 
 ---

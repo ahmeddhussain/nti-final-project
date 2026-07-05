@@ -104,15 +104,6 @@ pipeline {
                   --namespace monitoring \
                   -f monitoring/values-loki.yaml \
                   --wait --timeout 10m
-
-                echo "----------------------------------------------------------"
-                echo "GRAFANA ADMIN PASSWORD (user: admin):"
-                kubectl --kubeconfig $WORKSPACE/kubeconfig.yaml get secret \
-                  --namespace monitoring \
-                  -l app.kubernetes.io/component=admin-secret \
-                  -o jsonpath="{.items[0].data.admin-password}" | base64 --decode
-                echo ""
-                echo "----------------------------------------------------------"
                 '''
             }
         }
@@ -204,6 +195,25 @@ pipeline {
                     currentBuild.description = "${currentBuild.description ?: ''} | Grafana: http://${grafanaUrl}"
                 } else {
                     echo "Grafana LoadBalancer URL is still not ready."
+                }
+
+                // --- Grafana admin password, printed here alongside the
+                // URL so both pieces of login info show up together at
+                // the end of the build, instead of mid-build noise. ---
+                def grafanaPass = sh(
+                    script: '''
+                    set -e
+                    export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
+                    kubectl get secret \
+                      --namespace monitoring \
+                      -l app.kubernetes.io/component=admin-secret \
+                      -o jsonpath="{.items[0].data.admin-password}" 2>/dev/null | base64 --decode || true
+                    ''',
+                    returnStdout: true
+                ).trim()
+
+                if (grafanaPass) {
+                    echo "GRAFANA PASSWORD: ${grafanaPass}"
                 }
             }
         }
