@@ -42,38 +42,27 @@ pipeline {
         stage('5. Deploy App & Monitoring') {
             steps {
                 sh '''
-                # 1. Prepare Connection - Clean and regenerate kubeconfig
-                rm -f $WORKSPACE/kubeconfig.yaml
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig.yaml
-                
-                # 2. Fetch Secrets
+                set -e
+
+                rm -f "$WORKSPACE/kubeconfig.yaml"
+                aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" --kubeconfig "$WORKSPACE/kubeconfig.yaml"
+
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
-                
-                # 3. Deploy Prometheus Stack (Step 6)
-                helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-                helm repo add grafana https://grafana.github.io/helm-charts
-                helm repo update
-                
-                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig $WORKSPACE/kubeconfig.yaml \
-                  --namespace monitoring --create-namespace \
-                  --set grafana.adminPassword="admin" \
-                  --set prometheusOperator.admissionWebhooks.enabled=false \
-                  --set prometheusOperator.admissionWebhooks.patch.enabled=false \
-                  --set prometheusOperator.tls.enabled=false
-                
-                helm upgrade --install loki grafana/loki-stack --kubeconfig $WORKSPACE/kubeconfig.yaml --namespace monitoring --set loki.persistence.enabled=false
 
-                # 4. Deploy Application
-                helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig.yaml \
-                  --set frontend.image.repository=$FRONTEND_ECR \
-                  --set backend.image.repository=$BACKEND_ECR \
-                  --set frontend.image.tag=$BUILD_NUMBER \
-                  --set backend.image.tag=$BUILD_NUMBER \
-                  --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS \
-                  --set database.host=$DB_HOST
+                chmod +x "$WORKSPACE/scripts/bootstrap-monitoring.sh"
+                "$WORKSPACE/scripts/bootstrap-monitoring.sh" "$WORKSPACE/kubeconfig.yaml"
+
+                helm upgrade --install nti-release "$WORKSPACE/helm" --kubeconfig "$WORKSPACE/kubeconfig.yaml" \
+                  --namespace default \
+                  --set frontend.image.repository="$FRONTEND_ECR" \
+                  --set backend.image.repository="$BACKEND_ECR" \
+                  --set frontend.image.tag="$BUILD_NUMBER" \
+                  --set backend.image.tag="$BUILD_NUMBER" \
+                  --set s3_bucket_name="$S3_BUCKET" \
+                  --set database.password="$DB_PASS" \
+                  --set database.host="$DB_HOST"
                 '''
             }
         }
