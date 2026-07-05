@@ -42,7 +42,8 @@ pipeline {
         stage('5. Deploy App & Monitoring') {
             steps {
                 sh '''
-                # 1. Prepare Connection
+                # 1. Prepare Connection - Clean and regenerate kubeconfig
+                rm -rf $WORKSPACE/kubeconfig
                 aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig
                 
                 # 2. Fetch Secrets
@@ -82,27 +83,30 @@ pipeline {
                 sh '''
                 set +e
                 export KUBECONFIG="$WORKSPACE/kubeconfig"
-                export AWS_SHARED_CREDENTIALS_FILE=/var/jenkins_home/.aws/credentials
-                export AWS_CONFIG_FILE=/var/jenkins_home/.aws/config
+
+                # Diagnostic: Check pod status
+                echo "Checking Grafana pod status..."
+                kubectl -n monitoring get pods -l app.kubernetes.io/name=grafana -o wide 2>&1 || true
+                echo ""
+                
+                # Diagnostic: Check pod logs (last 10 lines)
+                echo "Recent Grafana pod logs:"
+                kubectl -n monitoring logs -l app.kubernetes.io/name=grafana --tail=10 2>&1 || true
+                echo ""
 
                 HOST_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
-                kubectl -n monitoring get svc prometheus-grafana >/dev/null 2>&1 || true
-
                 pkill -f "kubectl port-forward.*prometheus-grafana" || true
-                nohup kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 > grafana-port-forward.log 2>&1 &
-                sleep 8
+                sleep 2
 
-                if curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1; then
-                  echo "----------------------------------------------------------"
-                  echo "GRAFANA URL: http://${HOST_IP}:3000"
-                  echo "----------------------------------------------------------"
-                else
-                  echo "----------------------------------------------------------"
-                  echo "Grafana port-forward was started, but the UI did not become reachable yet."
-                  echo "Check the logs at $WORKSPACE/grafana-port-forward.log"
-                  echo "GRAFANA URL (if available): http://${HOST_IP}:3000"
-                  echo "----------------------------------------------------------"
-                fi
+                # Start the port-forward in the background
+                nohup kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 > grafana-port-forward.log 2>&1 &
+                sleep 3
+
+                echo "----------------------------------------------------------"
+                echo "GRAFANA URL: http://${HOST_IP}:3000"
+                echo "(Admin: admin / Password: admin)"
+                echo "Note: Grafana may take a few minutes to fully initialize."
+                echo "----------------------------------------------------------"
                 '''
             }
         }
