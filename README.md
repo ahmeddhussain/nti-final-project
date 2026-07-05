@@ -18,8 +18,7 @@ This repository demonstrates a modern cloud-native workflow using Terraform, Ans
 - [CI/CD Pipeline (Jenkinsfile)](#cicd-pipeline-jenkinsfile)
 - [Helm Deployment & Values](#helm-deployment--values)
 - [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+
 
 ---
 
@@ -34,15 +33,16 @@ terraform plan
 terraform apply --auto-approve
 ```
 
-2. Configure Jenkins host (update inventory and vault first):
+2. Configure Jenkins host (update inventory with your Jenkins-ec2 IP and vault with your  AWS credentials):
 
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/setup_jenkins_tools.yml
 ansible-playbook -i ansible/inventory.ini ansible/jenkins.yml 
 ansible-playbook -i ansible/inventory.ini ansible/sonarqube.yml
 ```
+3. Configure SonarQube and Jenkins to Run the Multi-branch pipeline located in the `Jenkinsfile`.
 
-3. Push code or trigger Jenkins job to run the pipeline defined in `Jenkinsfile`.
+3. Push code or trigger Jenkins job Manually.
 
 4. After a successful run the Jenkins job prints the frontend ELB hostname in the build output.
 
@@ -153,6 +153,7 @@ Stages (summary):
 Notes:
 - The pipeline uses `aws eks update-kubeconfig` to generate the kubeconfig file for Helm/kubectl.
 - Image tags and DB credentials are injected into Helm at deploy time using `--set` flags.
+- Dont forget to change your AWS_ACCOUNT_ID in the `Jenkinsfile`.
 
 Manual commands used by pipeline (examples):
 
