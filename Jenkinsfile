@@ -2,8 +2,7 @@ pipeline {
     agent any
 
     triggers {
-        // SCM Polling: automatically checks GitHub every minute for changes
-        pollSCM('* * * * *')
+        pollSCM('* * * * *') // SCM Polling: automatically checks GitHub every minute for changes
     }
 
     environment {
@@ -98,29 +97,29 @@ pipeline {
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # 3. Add official Prometheus & Grafana Repositories (MOVED UP)
+                # 3. Deploy application via Helm natively
+                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                  --set frontend.image.tag=$BUILD_NUMBER \
+                  --set backend.image.tag=$BUILD_NUMBER \
+                  --set s3_bucket_name=$S3_BUCKET \
+                  --set database.password=$DB_PASS
+                
+                # 4. Add official Prometheus & Grafana Repositories
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                # 4. Deploy Prometheus & Grafana FIRST (Registers the Custom Resource Definitions!)
+                # 5. Automatically deploy Prometheus & Grafana (ClusterIP keeps it secure & free)
                 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
                   --namespace monitoring \
                   --create-namespace \
                   --set grafana.adminPassword="admin" \
                   --set alertmanager.enabled=true
                 
-                # 5. Deploy Loki (Loki Stack for Logs)
+                # 6. Automatically deploy Loki (Loki Stack for Logs)
                 helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig \
                   --namespace monitoring \
                   --set loki.persistence.enabled=false
-                
-                # 6. Deploy your Application SECOND (Now EKS knows exactly what a 'PrometheusRule' is!)
-                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
-                  --set frontend.image.tag=$BUILD_NUMBER \
-                  --set backend.image.tag=$BUILD_NUMBER \
-                  --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS
                 '''
             }
         }
@@ -131,7 +130,13 @@ pipeline {
             echo 'Pipeline completed successfully! 🎉'
             sh '''
             # 1. Fetch the public ELB DNS name dynamically for the Frontend app
-            ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
+            # (We use a robust while-loop to wait for AWS to generate the DNS)
+            ELB_URL=""
+            while [ -z "$ELB_URL" ]; do
+              echo "Waiting for AWS to assign Public ELB DNS..."
+              sleep 5
+              ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
+            done
             
             # 2. Fetch your EC2 server's active AWS public IP dynamically
             HOST_IP=$(curl -s ifconfig.me)
@@ -144,7 +149,7 @@ pipeline {
               --name grafana-tunnel \
               --network host \
               -v "$(pwd)/kubeconfig:/config" \
-              bitnami/kubectl:1.28 \
+              bitnami/kubectl:latest \
               --kubeconfig /config port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
             
             echo ""
