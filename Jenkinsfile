@@ -106,8 +106,9 @@ pipeline {
                     set -e
                     export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
                     for i in $(seq 1 60); do
-                      SERVICE_NAMESPACE=$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null | awk '$2 ~ /frontend$/ {print $1; exit}')
-                      SERVICE_NAME=$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null | awk '$2 ~ /frontend$/ {print $2; exit}')
+                      SVC_LINE=$(kubectl get svc -A --no-headers 2>/dev/null | awk '$2 ~ /frontend$/ {print $1, $2; exit}')
+                      SERVICE_NAMESPACE=$(echo "$SVC_LINE" | awk '{print $1}')
+                      SERVICE_NAME=$(echo "$SVC_LINE" | awk '{print $2}')
 
                       if [ -n "$SERVICE_NAME" ] && [ -n "$SERVICE_NAMESPACE" ]; then
                         ELB_URL=$(kubectl get svc "$SERVICE_NAME" -n "$SERVICE_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
@@ -124,7 +125,7 @@ pipeline {
                     done
 
                     echo "Frontend ELB URL is still not ready. Current services:"
-                    kubectl get svc -A 2>/dev/null || true || true
+                    kubectl get svc -A 2>/dev/null || true
                     exit 0
                     ''',
                     returnStdout: true
