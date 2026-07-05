@@ -91,11 +91,14 @@ pipeline {
                 echo 'Deploying application and monitoring stack to EKS cluster...'
                 sh '''
                 # 1. Update EKS Connection context natively
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig kubeconfig
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
                 
                 # 2. Fetch variables dynamically from AWS
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                
+                # NEW: Fetch your active RDS Database Host dynamically!
+                DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
                 
                 # 3. Add official Prometheus & Grafana Repositories
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -103,7 +106,7 @@ pipeline {
                 helm repo update
                 
                 # 4. Deploy Prometheus & Grafana FIRST (Registers the Custom Resource Definitions!)
-                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
+                helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
                   --namespace monitoring \
                   --create-namespace \
                   --set grafana.adminPassword="admin" \
@@ -113,18 +116,19 @@ pipeline {
                   --set prometheusOperator.tls.enabled=false
                 
                 # 5. Deploy Loki (Loki Stack for Logs)
-                helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig \
+                helm upgrade --install loki grafana/loki-stack \
                   --namespace monitoring \
                   --set loki.persistence.enabled=false
                 
-                # 6. Deploy your Application SECOND (With ECR repositories mapped correctly!)
-                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                # 6. Deploy your Application SECOND (With ECR repositories & RDS URL mapped correctly!)
+                helm upgrade --install nti-release ./helm \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
                   --set frontend.image.tag=$BUILD_NUMBER \
                   --set backend.image.tag=$BUILD_NUMBER \
                   --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS
+                  --set database.password=$DB_PASS \
+                  --set database.host=$DB_HOST
                 '''
             }
         }
@@ -139,7 +143,7 @@ pipeline {
             while [ -z "$ELB_URL" ]; do
               echo "Waiting for AWS to assign Public ELB DNS..."
               sleep 5
-              ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
+              ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
             done
             
             # 2. Fetch your EC2 server's active AWS public IP dynamically
@@ -149,11 +153,12 @@ pipeline {
             docker rm -f grafana-tunnel || true
             
             # 4. AUTOMATION: Launch our custom, fully authenticated aws+kubectl tunnel in host network mode
+            # (Fixed: Mounts the permanent .kube directory directly into /root/.kube)
             docker run -d \
               --name grafana-tunnel \
               --network host \
               -v /home/ubuntu/.aws:/root/.aws \
-              -v "$(pwd)/kubeconfig:/apps/kubeconfig" \
+              -v /var/lib/docker/volumes/jenkins_home/_data/.kube:/root/.kube \
               --entrypoint "" \
               amazon/aws-cli bash -c "
                 # Install kubectl on the fly inside the container
@@ -161,7 +166,7 @@ pipeline {
                 chmod +x kubectl
                 
                 # Start the native port-forward using EKS authentication
-                ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 --kubeconfig /apps/kubeconfig
+                ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
               "
             
             echo ""
