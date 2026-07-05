@@ -148,13 +148,21 @@ pipeline {
             # 3. AUTOMATION: Destroy any old background tunnels to prevent port conflicts
             docker rm -f grafana-tunnel || true
             
-            # 4. AUTOMATION: Launch a tiny helper container pointing to the stable host volume path
+            # 4. AUTOMATION: Launch our custom, fully authenticated aws+kubectl tunnel in host network mode
             docker run -d \
               --name grafana-tunnel \
               --network host \
-              -v /var/lib/docker/volumes/jenkins_home/_data/.kube:/config \
-              bitnami/kubectl:latest \
-              --kubeconfig /config/config port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
+              -v /home/ubuntu/.aws:/root/.aws \
+              -v "$(pwd)/kubeconfig:/apps/kubeconfig" \
+              --entrypoint "" \
+              amazon/aws-cli bash -c "
+                # Install kubectl on the fly inside the container
+                curl -fsSL -LO https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
+                chmod +x kubectl
+                
+                # Start the native port-forward using EKS authentication
+                ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 --kubeconfig /apps/kubeconfig
+              "
             
             echo ""
             echo "=========================================================="
