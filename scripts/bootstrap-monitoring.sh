@@ -30,4 +30,4 @@ helm upgrade --install grafana grafana/grafana \
   --namespace monitoring \
   --wait --timeout 10m \
   --set adminPassword=admin \
-  --set service.type=ClusterIP
+  --set service.type=LoadBalancer

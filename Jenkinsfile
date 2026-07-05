@@ -70,24 +70,30 @@ pipeline {
         stage('6. Setup Complete') {
             steps {
                 sh '''
+                set -e
                 export KUBECONFIG="$WORKSPACE/kubeconfig.yaml"
-                HOST_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
-                
+
                 echo "----------------------------------------------------------"
                 echo "DEPLOYMENT COMPLETE!"
                 echo "----------------------------------------------------------"
                 echo ""
-                echo "TO ACCESS GRAFANA MONITORING:"
-                echo "1. Run this command on your Jenkins host:"
-                echo "   kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80"
-                echo ""
-                echo "2. Then open: http://localhost:3000"
-                echo "   Username: admin"
-                echo "   Password: admin"
-                echo ""
-                echo "OR access from remote machine:"
-                echo "   ssh -L 3000:localhost:3000 ubuntu@${HOST_IP}"
-                echo "   Then open: http://localhost:3000"
+
+                GRAFANA_URL=""
+                for i in $(seq 1 30); do
+                  GRAFANA_URL=$(kubectl get svc -n monitoring grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+                  if [ -n "$GRAFANA_URL" ]; then
+                    break
+                  fi
+                  sleep 10
+                done
+
+                if [ -n "$GRAFANA_URL" ]; then
+                  echo "GRAFANA URL: http://$GRAFANA_URL"
+                else
+                  echo "Grafana is still provisioning a public address."
+                fi
+                echo "Username: admin"
+                echo "Password: admin"
                 echo "----------------------------------------------------------"
                 '''
             }
