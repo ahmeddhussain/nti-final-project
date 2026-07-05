@@ -50,3 +50,9 @@ resource "aws_iam_role_policy_attachment" "ecr_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.node_role.name
 }
+
+# Required so EKS-managed services of type LoadBalancer can create AWS ELBs
+resource "aws_iam_role_policy_attachment" "elb_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess"
+  role       = aws_iam_role.node_role.name
+}
