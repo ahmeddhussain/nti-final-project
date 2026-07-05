@@ -50,19 +50,24 @@ pipeline {
         stage('6. Deploy to EKS') {
             steps {
                 sh '''
+                # 1. Generate kubeconfig
                 aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig kubeconfig
                 
+                # 2. Fetch AWS Variables
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
                 
+                # 3. Setup Helm Repos
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
+                # 4. Deploy Monitoring Stack
                 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig --namespace monitoring --create-namespace --set grafana.adminPassword="admin" --set alertmanager.enabled=true --set prometheusOperator.admissionWebhooks.enabled=false --set prometheusOperator.admissionWebhooks.patch.enabled=false --set prometheusOperator.tls.enabled=false
                 helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig --namespace monitoring --set loki.persistence.enabled=false
                 
+                # 5. Deploy Application
                 helm upgrade --install nti-release ./helm --kubeconfig kubeconfig --set frontend.image.repository=$FRONTEND_ECR --set backend.image.repository=$BACKEND_ECR --set frontend.image.tag=$BUILD_NUMBER --set backend.image.tag=$BUILD_NUMBER --set s3_bucket_name=$S3_BUCKET --set database.password=$DB_PASS --set database.host=$DB_HOST
                 '''
             }
@@ -80,35 +85,31 @@ pipeline {
               ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
             done
             
-            # 2. Wait for Grafana Readiness
-            echo "Waiting for Grafana Pod to be Ready..."
-            kubectl wait --namespace monitoring --for=condition=ready pod -l app.kubernetes.io/name=grafana --timeout=300s --kubeconfig kubeconfig
-            
-            # 3. Deep Wait: Give Grafana 60s to start its internal web server
-            echo "Allowing Grafana internal startup (60s)..."
-            sleep 60
-
+            # 2. Fetch active Host IP
             HOST_IP=$(curl -s ifconfig.me)
             
-            # 4. Launch Tunnel targeting the DEPLOYMENT on port 3000
+            # 3. START SELF-HEALING TUNNEL (targeting SVC port 80)
             docker rm -f grafana-tunnel || true
             docker run -d \
               --name grafana-tunnel \
               --network host \
               -v /home/ubuntu/.aws:/root/.aws \
-              -v "$(pwd)/kubeconfig:/root/.kube/config" \
+              -v "/var/lib/docker/volumes/jenkins_home/_data/workspace/${JOB_NAME.split('/')[0]}/kubeconfig:/root/.kube/config" \
               --entrypoint "" \
               amazon/aws-cli bash -c "
-                curl -fsSL -LO https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
-                chmod +x kubectl
-                echo 'Starting Grafana Tunnel...'
-                ./kubectl port-forward --address 0.0.0.0 -n monitoring deployment/prometheus-grafana 3000:3000
+                curl -fsSL -LO https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl && chmod +x kubectl
+                echo 'Starting Self-Healing Tunnel...'
+                while true; do
+                  ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80
+                  echo 'Tunnel lost connection, restarting in 5s...'
+                  sleep 5
+                done
               "
             
             echo ""
             echo "=========================================================="
-            echo "WEB APP: http://${ELB_URL}"
-            echo "GRAFANA: http://${HOST_IP}:3000"
+            echo "SUCCESS! WEB APP: http://${ELB_URL}"
+            echo "SUCCESS! GRAFANA: http://${HOST_IP}:3000"
             echo "=========================================================="
             '''
         }
