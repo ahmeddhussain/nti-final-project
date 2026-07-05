@@ -97,20 +97,12 @@ pipeline {
                 S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
                 DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
                 
-                # 3. Deploy your Application SECOND (EKS now knows what a 'PrometheusRule' is!)
-                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
-                  --set frontend.image.tag=$BUILD_NUMBER \
-                  --set backend.image.tag=$BUILD_NUMBER \
-                  --set s3_bucket_name=$S3_BUCKET \
-                  --set database.password=$DB_PASS
-                
-                # 4. Add official Prometheus & Grafana Repositories
+                # 3. Add official Prometheus & Grafana Repositories
                 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                 helm repo add grafana https://grafana.github.io/helm-charts
                 helm repo update
                 
-                # 5. Automatically deploy Prometheus & Grafana
-                # FIXED: We disable the heavy admission webhooks to bypass the pre-upgrade timeout entirely!
+                # 4. Deploy Prometheus & Grafana FIRST (Registers the Custom Resource Definitions!)
                 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --kubeconfig kubeconfig \
                   --namespace monitoring \
                   --create-namespace \
@@ -120,10 +112,19 @@ pipeline {
                   --set prometheusOperator.admissionWebhooks.patch.enabled=false \
                   --set prometheusOperator.tls.enabled=false
                 
-                # 6. Automatically deploy Loki (Loki Stack for Logs)
+                # 5. Deploy Loki (Loki Stack for Logs)
                 helm upgrade --install loki grafana/loki-stack --kubeconfig kubeconfig \
                   --namespace monitoring \
                   --set loki.persistence.enabled=false
+                
+                # 6. Deploy your Application SECOND (With ECR repositories mapped correctly!)
+                helm upgrade --install nti-release ./helm --kubeconfig kubeconfig \
+                  --set frontend.image.repository=$FRONTEND_ECR \
+                  --set backend.image.repository=$BACKEND_ECR \
+                  --set frontend.image.tag=$BUILD_NUMBER \
+                  --set backend.image.tag=$BUILD_NUMBER \
+                  --set s3_bucket_name=$S3_BUCKET \
+                  --set database.password=$DB_PASS
                 '''
             }
         }
