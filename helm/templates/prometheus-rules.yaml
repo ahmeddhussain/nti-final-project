@@ -1,29 +1,20 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: "{{ .Release.Name }}-pod-resource-alerts"
+  name: "{{ .Release.Name }}-resource-alerts"
   labels:
-    release: prometheus # Ties this rule directly to your Prometheus operator
+    release: prometheus
 spec:
   groups:
-  - name: resource-usage-alerts
+  - name: nti-alerts
     rules:
-    - alert: PodCPUUsageTooHigh
-      expr: sum(rate(container_cpu_usage_seconds_total{container!=""}[5m])) by (pod) / sum(container_spec_cpu_quota{container!=""}/100000) by (pod) > 0.80
+    - alert: HighCPUUsage
+      expr: node_load1 > 0.80
       for: 2m
-      labels:
-        severity: warning
       annotations:
-        summary: "Pod CPU usage is above 80%!"
-        # FIXED: We escape the double curly braces so Helm passes them literally to Prometheus!
-        description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has been using more than 80% CPU for the last 2 minutes."
-
-    - alert: PodMemoryUsageTooHigh
-      expr: container_memory_working_set_bytes{container!=""} / container_spec_memory_limit_bytes{container!=""} > 0.80
+        summary: "CPU Usage > 80% on {{ "{{" }} $labels.instance {{ "}}" }}"
+    - alert: HighRAMUsage
+      expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.80
       for: 2m
-      labels:
-        severity: warning
       annotations:
-        summary: "Pod Memory usage is above 80%!"
-        # FIXED: We escape the double curly braces so Helm passes them literally to Prometheus!
-        description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has been using more than 80% Memory for the last 2 minutes."
+        summary: "RAM Usage > 80% on {{ "{{" }} $labels.instance {{ "}}" }}"
