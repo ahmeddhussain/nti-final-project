@@ -31,9 +31,13 @@ pipeline {
 
         stage('4. Push to ECR') {
             steps {
+                // FIX: uses the native "aws" CLI installed inside the Jenkins
+                // container instead of a sidecar "amazon/aws-cli" container.
+                // This stage happened to work before because it never wrote
+                // a file back into $WORKSPACE, but it's changed here too for
+                // consistency with stage 5's real fix below.
                 sh """
-                # Fixed: Uses the official AWS CLI container to ensure the token is fetched correctly
-                docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
                 """
@@ -42,17 +46,35 @@ pipeline {
 
         stage('5. Deploy App') {
             steps {
+                // FIX (the actual bug): the old version ran
+                // "docker run -v $WORKSPACE:/apps amazon/aws-cli ..." via the
+                // mounted docker.sock. Since that docker command is executed
+                // by the HOST's Docker daemon (not nested inside Jenkins),
+                // $WORKSPACE was interpreted as a HOST path, not the path
+                // Jenkins itself sees — they are NOT the same location
+                // (jenkins_home is a named volume; its real host path is
+                // under /var/lib/docker/volumes/jenkins_home/_data/...).
+                // Docker silently created an empty, disconnected directory
+                // on the host, wrote the kubeconfig there, and it was never
+                // visible to Jenkins or Helm. Using the NATIVE aws CLI here
+                // (already installed inside the Jenkins container) writes
+                // directly to the real $WORKSPACE with no path translation
+                // and no sidecar container involved at all.
                 sh '''
-                # 1. Clean and regenerate kubeconfig using the AWS CLI wrapper
+                set -e
                 rm -f $WORKSPACE/kubeconfig.yaml
-                docker run --rm -v /home/ubuntu/.aws:/root/.aws -v $WORKSPACE:/apps amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig.yaml
-                
-                # 2. Fetch Secrets using the AWS CLI wrapper
-                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
-                DB_HOST=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
 
-                # 3. Deploy Application (Helm works natively!)
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig.yaml
+
+                S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text | awk '{print $1}')
+                DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
+
+                if [ -z "$DB_PASS" ] || [ -z "$DB_HOST" ]; then
+                  echo "ERROR: Failed to retrieve DB credentials or endpoint from AWS. Aborting."
+                  exit 1
+                fi
+
                 helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig.yaml \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
