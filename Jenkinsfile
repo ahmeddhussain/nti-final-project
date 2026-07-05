@@ -9,10 +9,6 @@ pipeline {
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
         FRONTEND_ECR   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-frontend-app"
         BACKEND_ECR    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/dev-backend-app"
-        
-        // FIX: Explicitly tell AWS CLI where the mounted credentials are!
-        AWS_SHARED_CREDENTIALS_FILE = '/var/jenkins_home/.aws/credentials'
-        AWS_CONFIG_FILE = '/var/jenkins_home/.aws/config'
     }
 
     stages {
@@ -36,7 +32,8 @@ pipeline {
         stage('4. Push to ECR') {
             steps {
                 sh """
-                aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                # Fixed: Uses the official AWS CLI container to ensure the token is fetched correctly
+                docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                 docker push ${FRONTEND_ECR}:${BUILD_NUMBER}
                 docker push ${BACKEND_ECR}:${BUILD_NUMBER}
                 """
@@ -46,16 +43,16 @@ pipeline {
         stage('5. Deploy App') {
             steps {
                 sh '''
-                # 1. Prepare Connection - Clean and regenerate kubeconfig
+                # 1. Clean and regenerate kubeconfig using the AWS CLI wrapper
                 rm -f $WORKSPACE/kubeconfig.yaml
-                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig $WORKSPACE/kubeconfig.yaml
+                docker run --rm -v /home/ubuntu/.aws:/root/.aws -v $WORKSPACE:/apps amazon/aws-cli eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME --kubeconfig /apps/kubeconfig.yaml
                 
-                # 2. Fetch Secrets
-                S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
-                DB_PASS=$(aws secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
-                DB_HOST=$(aws rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
+                # 2. Fetch Secrets using the AWS CLI wrapper
+                S3_BUCKET=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli s3api list-buckets --query "Buckets[?contains(Name, 'access-logs')].Name" --output text)
+                DB_PASS=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli secretsmanager get-secret-value --secret-id dev-rds-credentials --query SecretString --output text | grep -oP '"password":"\\K[^"]+')
+                DB_HOST=$(docker run --rm -v /home/ubuntu/.aws:/root/.aws amazon/aws-cli rds describe-db-instances --db-instance-identifier dev-mysql-db --query "DBInstances[0].Endpoint.Address" --output text)
 
-                # 3. Deploy Application
+                # 3. Deploy Application (Helm works natively!)
                 helm upgrade --install nti-release ./helm --kubeconfig $WORKSPACE/kubeconfig.yaml \
                   --set frontend.image.repository=$FRONTEND_ECR \
                   --set backend.image.repository=$BACKEND_ECR \
