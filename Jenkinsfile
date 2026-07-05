@@ -118,18 +118,26 @@ pipeline {
                         fi
                       fi
 
-                      echo "Waiting for frontend LoadBalancer..."
-                      kubectl get svc -A 2>/dev/null || true
-                      kubectl get pods -A 2>/dev/null || true
+                      # Debug/status noise goes to stderr so it never
+                      # contaminates the stdout value Jenkins captures below.
+                      echo "Waiting for frontend LoadBalancer..." >&2
+                      kubectl get svc -A >&2 2>/dev/null || true
+                      kubectl get pods -A >&2 2>/dev/null || true
                       sleep 15
                     done
 
-                    echo "Frontend ELB URL is still not ready. Current services:"
-                    kubectl get svc -A 2>/dev/null || true
+                    echo "Frontend ELB URL is still not ready. Current services:" >&2
+                    kubectl get svc -A >&2 2>/dev/null || true
                     exit 0
                     ''',
                     returnStdout: true
                 ).trim()
+
+                // Defensive: keep only the last non-empty line, in case
+                // anything still leaks through onto stdout.
+                if (elbUrl) {
+                    elbUrl = elbUrl.readLines().findAll { it.trim() }.last().trim()
+                }
 
                 if (elbUrl) {
                     echo "SUCCESS! WEB APP: http://${elbUrl}"

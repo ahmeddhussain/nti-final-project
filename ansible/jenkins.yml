@@ -109,6 +109,21 @@
         docker exec -u root jenkins ln -sf /var/jenkins_home/.local/bin/aws /usr/local/bin/aws
       changed_when: true
 
+    # FIX: /home/ubuntu/.kube was previously just an empty mounted directory
+    # with nothing ever written into it. Plain "kubectl ..." (no --kubeconfig
+    # flag) then fell back to kubectl's legacy default of localhost:8080 —
+    # which is Jenkins' own web UI port — producing a confusing "Authentication
+    # required" HTML error that looks like a cluster problem but isn't one.
+    # This populates the DEFAULT kubeconfig location (both on the host, for
+    # the ubuntu user, and inside the container, for the jenkins user, since
+    # they're the same bind-mounted directory) so manual debugging via SSH
+    # or "docker exec" just works with no extra flags.
+    - name: 13b. Populate default kubeconfig for manual debugging
+      ansible.builtin.shell: |
+        docker exec jenkins /usr/local/bin/aws eks update-kubeconfig --region us-east-1 --name nti-eks-cluster
+      changed_when: true
+      ignore_errors: true
+
     - name: 14. Verify all tools work inside the container
       ansible.builtin.shell: |
         echo "--- aws ---"; docker exec jenkins /usr/local/bin/aws --version
