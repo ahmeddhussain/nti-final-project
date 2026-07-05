@@ -16,7 +16,7 @@ pipeline {
 
         stage('2. SonarQube Analysis') {
             steps {
-                sh "docker run --rm -e SONAR_HOST_URL=${SONAR_HOST_URL} -v '${WORKSPACE}:/usr/src' sonarsource/sonar-scanner-cli -Dsonar.projectKey=nti-devops-app -Dsonar.projectName=nti-devops-app -Dsonar.sources=. -Dsonar.exclusions=terraform/**,ansible/**,helm/**"
+                sh "docker run --rm -e SONAR_HOST_URL=${SONAR_HOST_URL} -v '${WORKSPACE}:/usr/src' sonarsource/sonar-scanner-cli -Dsonar.projectKey=nti-devops-app -Dsonar.projectName=nti-devops-app -Dsonar.sources=. -Dsonar.exclusions=terraform/**,ansible/**,helm/** -Dsonar.qualitygate.wait=true"
             }
         }
 
@@ -77,19 +77,26 @@ pipeline {
             }
         }
 
-        stage('6. Establish Monitoring Tunnel') {
+        stage('6. Expose Grafana') {
             steps {
                 sh '''
-                HOST_IP=$(curl -s ifconfig.me)
-                docker rm -f grafana-tunnel || true
-                
-                # We use host-mode networking and the host credentials created by Ansible
-                docker run -d --name grafana-tunnel --network host \
-                  -v /home/ubuntu/.aws:/root/.aws \
-                  -v "/var/lib/docker/volumes/jenkins_home/_data/workspace/nti-final-project_main/kubeconfig:/root/.kube/config" \
-                  --entrypoint "" amazon/aws-cli bash -c \
-                  "curl -fsSL -LO https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl && chmod +x kubectl && while true; do ./kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80; sleep 5; done"
-                
+                set -e
+                export KUBECONFIG="$WORKSPACE/kubeconfig"
+                export AWS_SHARED_CREDENTIALS_FILE=/var/jenkins_home/.aws/credentials
+                export AWS_CONFIG_FILE=/var/jenkins_home/.aws/config
+
+                HOST_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
+                pkill -f "kubectl port-forward.*prometheus-grafana" || true
+
+                nohup kubectl port-forward --address 0.0.0.0 -n monitoring svc/prometheus-grafana 3000:80 > grafana-port-forward.log 2>&1 &
+
+                for i in $(seq 1 20); do
+                  if curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1; then
+                    break
+                  fi
+                  sleep 5
+                done
+
                 echo "----------------------------------------------------------"
                 echo "GRAFANA URL: http://${HOST_IP}:3000"
                 echo "----------------------------------------------------------"
@@ -100,10 +107,31 @@ pipeline {
 
     post {
         success {
-            sh '''
-            ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --kubeconfig kubeconfig)
-            echo "SUCCESS! WEB APP: http://${ELB_URL}"
-            '''
+            script {
+                def kubeconfig = "${env.WORKSPACE}/kubeconfig"
+                def elbUrl = sh(
+                    script: """
+                    export KUBECONFIG='${kubeconfig}'
+                    for i in $(seq 1 30); do
+                      ELB_URL=$(kubectl get svc nti-release-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+                      if [ -n \"$ELB_URL\" ]; then
+                        echo \"$ELB_URL\"
+                        exit 0
+                      fi
+                      sleep 10
+                    done
+                    exit 0
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                if (elbUrl) {
+                    echo "SUCCESS! WEB APP: http://${elbUrl}"
+                    currentBuild.description = "App URL: http://${elbUrl}"
+                } else {
+                    echo "Frontend ELB URL is still not ready."
+                }
+            }
         }
     }
 }

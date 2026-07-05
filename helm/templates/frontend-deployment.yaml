@@ -18,5 +18,8 @@ spec:
         - name: frontend
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
           imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKEND_HOST
+              value: "{{ .Release.Name }}-backend"
           ports:
             - containerPort: 80
