@@ -33,7 +33,12 @@
           aws_access_key_id = {{ aws_access_key_id }}
           aws_secret_access_key = {{ aws_secret_access_key }}
 
-    - name: 4. Inject AWS Default Region Config
+    # This file is bind-mounted straight into the Jenkins container at
+    # /var/jenkins_home/.aws/config — this task is the single source of
+    # truth for AWS CLI config inside Jenkins. cli_pager is disabled
+    # because the Jenkins container image has no "less" installed, and a
+    # default AWS CLI v2 tries to pipe output through it.
+    - name: 4. Inject AWS Default Region & Disable CLI Pager
       ansible.builtin.copy:
         dest: /home/ubuntu/.aws/config
         mode: '0600'
@@ -43,33 +48,56 @@
           [default]
           region = {{ aws_default_region }}
           output = json
+          cli_pager =
 
     - name: 5. Download and Unarchive AWS CLI v2
       ansible.builtin.unarchive:
         src: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
         dest: /tmp
         remote_src: true
-        creates: /tmp/aws/install # Skips download if already unzipped
+        creates: /tmp/aws/install
 
-    - name: 6. Install AWS CLI v2
+    - name: 6. Install/Update AWS CLI v2 on host
       ansible.builtin.command: /tmp/aws/install --update
       args:
-        creates: /usr/local/bin/aws # Skips install if AWS is already installed
+        creates: /usr/local/aws-cli/v2/current/dist/aws
 
-    - name: 7. Download and Install Kubectl
+    - name: 6b. Ensure aws symlink exists on host
+      ansible.builtin.file:
+        src: /usr/local/aws-cli/v2/current/bin/aws
+        dest: /usr/local/bin/aws
+        state: link
+        force: true
+
+    # force: true — always re-download/overwrite. Prevents a stale or
+    # placeholder file from a bad prior bind mount silently blocking
+    # future installs forever (get_url skips existing files by default).
+    - name: 7. Download and Install Kubectl (always fresh)
       ansible.builtin.get_url:
         url: https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
         dest: /usr/local/bin/kubectl
         mode: '0755'
         owner: root
+        force: true
 
-    - name: 8. Download and Install Helm 3
+    # Self-healing: if a bad Docker bind mount previously left an empty
+    # placeholder file here, "creates" in task 9 would otherwise skip
+    # installing forever. This removes anything under 1KB (i.e. not a
+    # real Helm binary) before the real install runs.
+    - name: 8. Remove stale/empty helm placeholder if present
+      ansible.builtin.shell: |
+        if [ -f /usr/local/bin/helm ] && [ $(stat -c%s /usr/local/bin/helm 2>/dev/null || echo 0) -lt 1024 ]; then
+          rm -f /usr/local/bin/helm
+        fi
+      changed_when: true
+
+    - name: 9. Download and Install Helm 3
       ansible.builtin.shell: |
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       args:
-        creates: /usr/local/bin/helm # Skips if Helm is already installed
+        creates: /usr/local/bin/helm
 
-    - name: 9. Clean up temporary installer artifacts
+    - name: 10. Clean up temporary installer artifacts
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -78,10 +106,22 @@
         - /tmp/awscliv2.zip
         - /tmp/get_helm.sh
 
-    - name: 10. Delete any corrupt workspace directories (Host Cleanup)
+    - name: 11. Delete any corrupt workspace directories (Host Cleanup)
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
         - /var/lib/docker/volumes/jenkins_home/_data/workspace/nti-final-project_main/kubeconfig
       ignore_errors: true
+
+    - name: 12. Verify host tool versions
+      ansible.builtin.shell: |
+        echo "--- aws ---"; /usr/local/bin/aws --version
+        echo "--- kubectl ---"; /usr/local/bin/kubectl version --client
+        echo "--- helm ---"; /usr/local/bin/helm version
+      register: host_tool_check
+      changed_when: false
+
+    - name: 13. Show host tool verification result
+      ansible.builtin.debug:
+        msg: "{{ host_tool_check.stdout_lines }}"

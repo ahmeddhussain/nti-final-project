@@ -37,8 +37,8 @@ terraform apply --auto-approve
 2. Configure Jenkins host (update inventory and vault first):
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/jenkins.yml
 ansible-playbook -i ansible/inventory.ini ansible/setup_jenkins_tools.yml
+ansible-playbook -i ansible/inventory.ini ansible/jenkins.yml 
 ansible-playbook -i ansible/inventory.ini ansible/sonarqube.yml
 ```
 
@@ -130,8 +130,8 @@ Review `terraform/variables.tf` and `terraform/terraform.tfvars` before applying
 Example:
 
 ```bash
+ansible-playbook -i ansible/inventory.ini ansible/setup_jenkins_tools.yml 
 ansible-playbook -i ansible/inventory.ini ansible/jenkins.yml
-ansible-playbook -i ansible/inventory.ini ansible/setup_jenkins_tools.yml
 ```
 
 The playbooks mount host binaries into the Jenkins container so Jenkins can run `docker`, `helm`, `kubectl`, and `aws` natively.

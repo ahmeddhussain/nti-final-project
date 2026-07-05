@@ -48,8 +48,7 @@
         path: /var/run/docker.sock
         mode: '0777'
 
-    # PREVENTS DOCKER MOUNT BUGS: Pre-creates the host paths as files/folders before Docker runs
-    - name: 8. Pre-create tool directories and files on host
+    - name: 8. Pre-create tool directories on host
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: "{{ item.state }}"
@@ -58,12 +57,26 @@
         group: ubuntu
       loop:
         - { path: '/home/ubuntu/.aws', state: 'directory' }
-        - { path: '/usr/local/aws-cli', state: 'directory' }
-        - { path: '/usr/local/bin/aws', state: 'touch' }
-        - { path: '/usr/local/bin/helm', state: 'touch' }
-        - { path: '/usr/local/bin/kubectl', state: 'touch' }
+        - { path: '/home/ubuntu/.kube', state: 'directory' }
 
-    - name: 9. Launch Jenkins LTS Container with Host Tool Volume Mounts
+    - name: 9. Fail fast if host tools are missing (order-of-operations guard)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: tool_check
+      loop:
+        - /usr/local/bin/kubectl
+        - /usr/local/bin/helm
+      failed_when: not tool_check.stat.exists or tool_check.stat.size < 1024
+
+    - name: 10. Remove existing Jenkins container so updated mounts take effect
+      ansible.builtin.shell: |
+        docker rm -f jenkins >/dev/null 2>&1 || true
+      changed_when: false
+
+    # kubectl/helm are bind-mounted from the host (guaranteed real files by
+    # task 9's guard above). AWS CLI is deliberately NOT bind-mounted — see
+    # header note — it's installed natively inside the container in task 11.
+    - name: 11. Launch Jenkins LTS Container with Host Tool Volume Mounts
       ansible.builtin.shell: |
         docker run -p 8080:8080 -p 50000:50000 -d \
           --name jenkins \
@@ -72,23 +85,51 @@
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v /usr/bin/docker:/usr/bin/docker \
           -v /home/ubuntu/.aws:/var/jenkins_home/.aws \
+          -v /home/ubuntu/.kube:/var/jenkins_home/.kube \
           -v /usr/local/bin/helm:/usr/local/bin/helm \
           -v /usr/local/bin/kubectl:/usr/local/bin/kubectl \
-          -v /usr/local/bin/aws:/usr/local/bin/aws \
-          -v /usr/local/aws-cli:/usr/local/aws-cli \
           jenkins/jenkins:lts
-      ignore_errors: true
 
-    # DYNAMIC RETRIES: Polls every 5 seconds until the password file is generated
-    - name: 10. Retrieve Jenkins Initiation Password (with dynamic retries)
+    - name: 12. Install AWS CLI natively inside the container (idempotent)
+      ansible.builtin.shell: |
+        docker exec jenkins sh -lc '
+          rm -rf /var/jenkins_home/.aws-cli /var/jenkins_home/.local/bin/aws &&
+          mkdir -p /tmp/aws-install /var/jenkins_home/.local/bin &&
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip &&
+          unzip -q /tmp/awscliv2.zip -d /tmp/aws-install &&
+          /tmp/aws-install/aws/install -i /var/jenkins_home/.aws-cli -b /var/jenkins_home/.local/bin &&
+          rm -rf /tmp/aws-install /tmp/awscliv2.zip
+        '
+      changed_when: true
+
+    # -u root: /usr/local/bin is root-owned in this image, and the
+    # container's default user (jenkins) can't write there.
+    - name: 13. Symlink aws inside the container to a stable PATH location
+      ansible.builtin.shell: |
+        docker exec -u root jenkins ln -sf /var/jenkins_home/.local/bin/aws /usr/local/bin/aws
+      changed_when: true
+
+    - name: 14. Verify all tools work inside the container
+      ansible.builtin.shell: |
+        echo "--- aws ---"; docker exec jenkins /usr/local/bin/aws --version
+        echo "--- kubectl ---"; docker exec jenkins /usr/local/bin/kubectl version --client
+        echo "--- helm ---"; docker exec jenkins /usr/local/bin/helm version
+      register: container_tool_check
+      changed_when: false
+
+    - name: 15. Show in-container tool verification result
+      ansible.builtin.debug:
+        msg: "{{ container_tool_check.stdout_lines }}"
+
+    - name: 16. Retrieve Jenkins Initial Admin Password (with dynamic retries)
       ansible.builtin.command: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
       register: jenkins_password
       until: jenkins_password.rc == 0
-      retries: 12 # Retries up to 12 times (1 minute total)
-      delay: 5    # Waits 5 seconds between retries
-      ignore_errors: true # Prevents crashes on subsequent runs if Jenkins already deleted the file
+      retries: 12
+      delay: 5
+      ignore_errors: true
 
-    - name: 11. SHOW JENKINS INITIAL ADMIN PASSWORD
+    - name: 17. SHOW JENKINS INITIAL ADMIN PASSWORD
       ansible.builtin.debug:
         msg: "SUCCESS! Your Jenkins Initial Admin Password is: {{ jenkins_password.stdout }}"
       when: jenkins_password.rc == 0
