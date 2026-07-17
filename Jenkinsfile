@@ -3,7 +3,7 @@ pipeline {
     triggers { pollSCM('* * * * *') }
 
     environment {
-        AWS_ACCOUNT_ID = '800770414458'
+        AWS_ACCOUNT_ID = 'your-id'
         AWS_REGION     = 'us-east-1'
         CLUSTER_NAME   = 'nti-eks-cluster'
         SONAR_HOST_URL = 'http://172.17.0.1:9000'
